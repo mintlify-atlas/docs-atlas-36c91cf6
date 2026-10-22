@@ -1,0 +1,101 @@
+{
+  "projectType": "saas",
+  "projectName": "BeautySalon",
+  "projectDescription": "A full-stack SaaS web application for managing unisex beauty salon operations — including online appointment booking, service catalog management, staff scheduling, client history, and a centralized admin dashboard.",
+  "theme": "almond",
+  "primaryColor": "#d99726",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "demo-mode"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/dashboard",
+              "features/appointments",
+              "features/services",
+              "features/staff",
+              "features/categories",
+              "features/clients"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "auth/overview",
+              "auth/roles"
+            ]
+          },
+          {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/setup",
+              "self-hosting/environment",
+              "self-hosting/database"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Data Reference",
+        "groups": [
+          {
+            "group": "Database Schema",
+            "pages": [
+              "reference/schema-overview",
+              "reference/appointments-table",
+              "reference/services-table",
+              "reference/staff-table",
+              "reference/clients-table"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/supabase-rls",
+              "reference/service-categories"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Centralized admin dashboard with real-time appointment statistics (daily, weekly, monthly views)",
+    "Online appointment booking with client lookup by NIT/cédula",
+    "Service catalog with categories, price ranges, durations, and buffer times",
+    "Staff management with real-time availability tracking",
+    "Client history and contact management",
+    "Demo mode for exploring the app without a Supabase account",
+    "Dark mode support with responsive UI",
+    "Row-Level Security (RLS) via Supabase for data isolation"
+  ],
+  "publicApiSurface": [
+    "supabase.from('appointments').select/insert/update/delete",
+    "supabase.from('services').select/insert/update/delete",
+    "supabase.from('staff').select/insert/update/delete",
+    "supabase.from('clients').select/upsert",
+    "supabase.from('staff_categories').select/insert/update/delete",
+    "supabase.auth.signInWithPassword(email, password)",
+    "supabase.auth.signUp(email, password, { display_name })",
+    "supabase.auth.signOut()",
+    "useAuth() hook — { user, session, loading, isDemo, signIn, signUp, signOut, enterDemo }",
+    "AuthProvider component",
+    "AdminDashboard — stats with period filter (day/week/month)",
+    "AdminAppointments — CRUD with status workflow: pending → confirmed → completed / cancelled",
+    "AdminServices — CRUD with category, price range, duration, buffer time",
+    "AdminStaff — CRUD with real-time busy/available status",
+    "AdminCategories — CRUD for staff_categories (service/staff groupings)"
+  ]
+}

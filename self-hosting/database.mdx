@@ -1,0 +1,256 @@
+---
+title: "Database Migrations and Supabase Schema Setup"
+sidebarTitle: "Database"
+description: "BeautySalon's schema is defined in 5 SQL migration files. Apply them in order via the Supabase dashboard SQL editor or the Supabase CLI to set up all tables and RLS policies."
+---
+
+BeautySalon uses Supabase's migration system to version-control every change to the Postgres database schema. All five migration files live in the `supabase/migrations/` directory and must be applied in chronological order — each file builds on the tables, types, and functions defined by the ones before it. After running all five migrations your database will have every table, index, trigger, RLS policy, and enum type the application needs.
+
+<Warning>
+  Always apply migrations **in the order they appear below** (oldest timestamp first). Applying them out of order will cause foreign key or dependency errors — for example, Migration 2 references the `update_updated_at_column()` trigger function that is created in Migration 1.
+</Warning>
+
+## Migration Overview
+
+| # | Filename | What it creates |
+|---|---|---|
+| 1 | `20260320234404_...sql` | `profiles`, `categories`, `transactions` + shared trigger function + auth hook |
+| 2 | `20260411210137_...sql` | `staff_categories`, `staff`, `services`, `appointments` + RLS policies |
+| 3 | `20260411212420_...sql` | Extended columns on `services` (price range, duration range, gender, etc.) |
+| 4 | `20260411220452_...sql` | New columns on `appointments` (`nit_cedula`, `direccion`) + nullable `client_phone` |
+| 5 | `20260411221558_...sql` | New `clients` table with RLS policies and `updated_at` trigger |
+
+## All Database Tables
+
+| Table | Description |
+|---|---|
+| `profiles` | One row per authenticated user; stores a `display_name` and links to `auth.users` via `user_id`. |
+| `categories` | User-scoped income / expense categories for financial tracking; holds an icon and colour per category. |
+| `transactions` | Financial transactions (income or expense) linked to a `category_id` and a `user_id`. |
+| `staff_categories` | Taxonomy of staff roles / specialisations (e.g. Haircut, Nails). Globally visible, write-protected to authenticated users. |
+| `staff` | Individual staff members with name, phone, email, photo, and a foreign key to `staff_categories`. |
+| `services` | Salon services with price range, duration range, gender targeting, consultation flag, and buffer time. |
+| `appointments` | Client bookings linking a service and a staff member, with status tracking and client contact details. |
+| `clients` | Deduplicated client records keyed by `nit_cedula` (national ID / tax number), with contact info. |
+
+## Migration 1 — Foundation Schema
+
+**File:** `20260320234404_e9646c4f-de8e-4d94-ba07-bb9181129f49.sql`
+
+This first migration lays the shared infrastructure that all later migrations depend on. It creates the `update_updated_at_column()` trigger function (reused by every subsequent table), the `profiles` table tied to Supabase Auth, the `categories` and `transactions` tables for financial tracking, and the `on_auth_user_created` trigger that automatically provisions a profile row whenever a new user signs up.
+
+```sql
+-- Shared trigger function (reused by all later tables)
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+-- Auto-create a profile row on every new signup
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (user_id, display_name)
+  VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1)));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+**Tables created:** `profiles`, `categories`, `transactions`
+
+**Enums created:** `category_type` (`income` | `expense`), `transaction_type` (`income` | `expense`)
+
+**Indexes created:**
+- `idx_transactions_user_date` on `transactions(user_id, date DESC)`
+- `idx_transactions_category` on `transactions(category_id)`
+- `idx_categories_user` on `categories(user_id)`
+
+## Migration 2 — Salon Core Schema
+
+**File:** `20260411210137_1eb3dc8e-a326-4ac2-bc69-c1f2b2386ba8.sql`
+
+This is the primary salon-operations migration. It creates the four tables that power the main admin interface: staff categories, staff members, services, and appointments. Every table gets RLS policies — public `SELECT` for browsable data, and `authenticated`-only `INSERT` / `UPDATE` / `DELETE` for write operations. Crucially, the `appointments` table allows anonymous `INSERT` so clients can book without creating an account.
+
+```sql
+-- Appointments status is constrained to a fixed set
+CREATE TABLE public.appointments (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  client_phone TEXT NOT NULL,
+  client_email TEXT,
+  service_id UUID REFERENCES public.services(id) ON DELETE SET NULL,
+  staff_id UUID REFERENCES public.staff(id) ON DELETE SET NULL,
+  appointment_date DATE NOT NULL,
+  appointment_time TIME NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Public booking is allowed (anon INSERT)
+CREATE POLICY "Anyone can create appointments"
+  ON public.appointments FOR INSERT TO anon, authenticated WITH CHECK (true);
+```
+
+**Tables created:** `staff_categories`, `staff`, `services`, `appointments`
+
+## Migration 3 — Extended Service Attributes
+
+**File:** `20260411212420_6adfc7e4-76fa-4cea-b43b-810245e96143.sql`
+
+Replaces the single `price` and `duration_minutes` columns on `services` with range-based equivalents to accommodate services that vary in price or time depending on hair length, complexity, or other factors. A data migration carries existing values forward before the old columns are dropped.
+
+```sql
+ALTER TABLE public.services
+  ADD COLUMN IF NOT EXISTS price_min numeric NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS price_max numeric NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS duration_min integer NOT NULL DEFAULT 30,
+  ADD COLUMN IF NOT EXISTS duration_max integer NOT NULL DEFAULT 30,
+  ADD COLUMN IF NOT EXISTS gender text NOT NULL DEFAULT 'all',
+  ADD COLUMN IF NOT EXISTS requires_consultation boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS buffer_time integer NOT NULL DEFAULT 0;
+
+-- Preserve existing data before dropping old columns
+UPDATE public.services
+  SET price_min = price, price_max = price,
+      duration_min = duration_minutes, duration_max = duration_minutes
+  WHERE price_min = 0;
+
+ALTER TABLE public.services DROP COLUMN IF EXISTS price;
+ALTER TABLE public.services DROP COLUMN IF EXISTS duration_minutes;
+```
+
+**Columns added to `services`:** `price_min`, `price_max`, `duration_min`, `duration_max`, `gender`, `requires_consultation`, `buffer_time`
+
+**Columns removed from `services`:** `price`, `duration_minutes`
+
+## Migration 4 — Appointment Client Identity Fields
+
+**File:** `20260411220452_019a11d8-debd-4e64-a4ab-6218fd75bf2d.sql`
+
+Adds two new optional columns to `appointments` to capture a client's national ID / tax number and address at booking time, and relaxes the `client_phone` constraint to allow phone-less bookings.
+
+```sql
+ALTER TABLE public.appointments
+  ADD COLUMN nit_cedula TEXT,
+  ADD COLUMN direccion TEXT;
+
+-- Allow bookings without a phone number
+ALTER TABLE public.appointments ALTER COLUMN client_phone DROP NOT NULL;
+```
+
+**Columns added to `appointments`:** `nit_cedula`, `direccion`
+
+## Migration 5 — Dedicated Clients Table
+
+**File:** `20260411221558_9f3281bd-92ed-43ff-9c0b-9c65e4af4ec9.sql`
+
+Introduces a standalone `clients` table keyed by `nit_cedula` (unique national ID / tax number). This allows the admin panel to maintain a persistent, deduplicated client registry independent of individual appointment records.
+
+```sql
+CREATE TABLE public.clients (
+  id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  nit_cedula TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  email TEXT,
+  phone TEXT,
+  direccion TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can view clients"
+  ON public.clients FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Authenticated users can insert clients"
+  ON public.clients FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Authenticated users can update clients"
+  ON public.clients FOR UPDATE TO authenticated USING (true);
+CREATE POLICY "Authenticated users can delete clients"
+  ON public.clients FOR DELETE TO authenticated USING (true);
+```
+
+**Tables created:** `clients`
+
+## Applying Migrations
+
+<Tabs>
+  <Tab title="Supabase Dashboard (SQL Editor)">
+    The dashboard SQL editor requires no tooling and works from any browser.
+
+    <Steps>
+      <Step title="Open the SQL Editor">
+        In your Supabase project, click **SQL Editor** in the left sidebar.
+      </Step>
+      <Step title="Paste and run Migration 1">
+        Click **New query**, paste the full contents of `20260320234404_...sql`, and click **Run** (or press `Ctrl+Enter`). Confirm the output shows no errors.
+      </Step>
+      <Step title="Repeat for each migration in order">
+        Create a new query tab for each subsequent file and run them one at a time in the order listed above. Do not skip ahead — each migration depends on the previous one.
+      </Step>
+      <Step title="Verify the tables">
+        Navigate to **Table Editor** in the sidebar. You should see all eight tables: `profiles`, `categories`, `transactions`, `staff_categories`, `staff`, `services`, `appointments`, and `clients`.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Supabase CLI">
+    The CLI is the recommended approach for teams and for keeping local and remote schemas in sync.
+
+    <Steps>
+      <Step title="Install the Supabase CLI">
+        ```bash
+        npm install -g supabase
+        ```
+      </Step>
+      <Step title="Log in and link your project">
+        ```bash
+        supabase login
+        supabase link --project-ref urhjpytguishnlqficgr
+        ```
+        Replace `urhjpytguishnlqficgr` with your own project reference if you are not using the demo project.
+      </Step>
+      <Step title="Push all migrations">
+        ```bash
+        supabase db push
+        ```
+        This command applies every file in `supabase/migrations/` that has not yet been applied to the linked remote project, in timestamp order.
+      </Step>
+    </Steps>
+
+    <Tip>
+      For **local development** with a full Supabase stack running in Docker (Postgres, Auth, Storage, Studio), run `supabase start`. The CLI will apply all migrations automatically when it starts the local containers. Point your `.env.local` at `http://localhost:54321` and the anon key printed by `supabase start`.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Row Level Security Summary
+
+Every table has RLS enabled. The policies follow a consistent pattern:
+
+<Accordion title="User-scoped tables (profiles, categories, transactions)">
+  Each row is tied to a `user_id` column that references `auth.users(id)`. All four operations (SELECT, INSERT, UPDATE, DELETE) are restricted to `auth.uid() = user_id`. Users can only see and modify their own data.
+</Accordion>
+
+<Accordion title="Salon operational tables (staff_categories, staff, services)">
+  Public `SELECT` is allowed for all visitors (unauthenticated and authenticated alike) so the service menu and staff roster can be displayed on public-facing pages. `INSERT`, `UPDATE`, and `DELETE` require an authenticated session — only logged-in admin users can make changes.
+</Accordion>
+
+<Accordion title="Appointments">
+  Anonymous users (i.e., clients booking online without an account) can `INSERT` a new appointment. `SELECT` is open to everyone. `UPDATE` and `DELETE` are restricted to authenticated users, keeping appointment management in the hands of salon staff.
+</Accordion>
+
+<Accordion title="Clients">
+  All four operations are restricted to authenticated users. The client registry is an internal admin resource and is not exposed to unauthenticated visitors.
+</Accordion>

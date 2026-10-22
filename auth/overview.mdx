@@ -1,0 +1,266 @@
+---
+title: "Authentication with Supabase Auth: Sign Up, Sign In, Sign Out"
+sidebarTitle: "Overview"
+description: "BeautySalon uses Supabase Auth for email/password authentication. The useAuth hook exposes user state, session, sign-in, sign-up, and demo mode entry."
+---
+
+BeautySalon delegates all authentication to **Supabase Auth**, which handles email/password credential storage, JWT session management, and secure token refresh entirely on the backend. The frontend wraps this behaviour in a single React context — `AuthProvider` — that makes auth state and actions available throughout the component tree via the `useAuth()` hook. Every route in the app is either publicly accessible only when logged out, or protected behind a live session check, so users are always routed to the right place automatically.
+
+## AuthProvider and useAuth
+
+`AuthProvider` is mounted at the very top of the React tree, directly inside `QueryClientProvider` and outside all routing. It subscribes to Supabase's `onAuthStateChange` listener on mount and also calls `getSession()` once at startup to hydrate state from `localStorage` without waiting for a server round-trip. When the component unmounts the listener subscription is cleaned up automatically.
+
+```tsx App.tsx
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <AuthProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/"        element={<PublicRoute><Login /></PublicRoute>} />
+            <Route path="/admin/*" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
+            <Route path="*"        element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </AuthProvider>
+  </QueryClientProvider>
+);
+```
+
+Any component below `AuthProvider` can call `useAuth()` to access the full context. Calling it outside the provider throws an error immediately so misconfigured trees are caught at development time.
+
+```tsx usage example
+import { useAuth } from "@/hooks/useAuth";
+
+function ProfileBadge() {
+  const { user, signOut, isDemo } = useAuth();
+
+  return (
+    <div>
+      <span>{user?.user_metadata?.display_name ?? user?.email}</span>
+      {isDemo && <em> (demo mode)</em>}
+      <button onClick={signOut}>Sign out</button>
+    </div>
+  );
+}
+```
+
+## AuthContextType Interface
+
+The full TypeScript interface exported from `src/hooks/useAuth.tsx`:
+
+```typescript src/hooks/useAuth.tsx
+interface AuthContextType {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  isDemo: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, displayName: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  enterDemo: () => void;
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="user" icon="circle-user">
+    The Supabase `User` object for the active session, or `null` when logged out. In demo mode this is the hardcoded `DEMO_USER` object.
+  </Card>
+  <Card title="session" icon="key">
+    The full Supabase `Session` (JWT access token + refresh token). Always `null` in demo mode.
+  </Card>
+  <Card title="loading" icon="spinner">
+    `true` only during the initial hydration from `localStorage`. Route guards render a spinner while this is `true`.
+  </Card>
+  <Card title="isDemo" icon="flask">
+    `true` when the user entered via `enterDemo()`. No Supabase session exists; Supabase calls that depend on a real JWT will fail.
+  </Card>
+</CardGroup>
+
+## Auth Actions
+
+### signIn
+
+Calls `supabase.auth.signInWithPassword`. On success Supabase emits an `onAuthStateChange` event that automatically updates `user` and `session` in context. On failure the Supabase error is re-thrown so the calling component can display it.
+
+```typescript
+const signIn = async (email: string, password: string) => {
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+};
+```
+
+<Note>
+  The Login page catches this error and surfaces it via `toast.error(err.message)`. You do not need to handle `toast` calls inside `signIn` itself — keep error display at the call site.
+</Note>
+
+### signUp
+
+Calls `supabase.auth.signUp` with the `display_name` stored in `options.data` (user metadata) and `emailRedirectTo` set to the current origin. Supabase will send a confirmation email; the user must click the link before they can sign in.
+
+```typescript
+const signUp = async (email: string, password: string, displayName: string) => {
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { display_name: displayName },
+      emailRedirectTo: window.location.origin,
+    },
+  });
+  if (error) throw error;
+};
+```
+
+On successful signup the `on_auth_user_created` database trigger fires and inserts a row into `public.profiles` with `display_name` copied from metadata (falling back to the email prefix if no name was supplied).
+
+### signOut
+
+In a real session, calls `supabase.auth.signOut` which revokes the JWT and clears `localStorage`. In demo mode, no Supabase call is made — the local `user` state is cleared and `isDemo` is reset to `false`.
+
+```typescript
+const signOut = async () => {
+  if (isDemo) {
+    setUser(null);
+    setIsDemo(false);
+    return;
+  }
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+};
+```
+
+### enterDemo
+
+Sets the local `user` state to the hardcoded `DEMO_USER` object and flips `isDemo` to `true`. No network request is made to Supabase. The demo user bypasses route guards because `user` is non-null, but any Supabase query that requires a real JWT (e.g. RLS-protected writes) will be rejected by the database.
+
+```typescript
+const DEMO_USER = {
+  id: "demo-user-id",
+  email: "admin@salon.app",
+  user_metadata: { display_name: "Admin Demo" },
+} as unknown as User;
+
+const enterDemo = () => {
+  setUser(DEMO_USER);
+  setIsDemo(true);
+};
+```
+
+<Tip>
+  The **Probar Demo** button on the login page calls `enterDemo()` then navigates to `/admin` — no credentials required. This is ideal for showing the interface to prospective clients without creating real Supabase accounts.
+</Tip>
+
+## Route Guards
+
+Two wrapper components in `App.tsx` enforce auth state on every navigation.
+
+<Tabs>
+  <Tab title="ProtectedRoute">
+    Renders a full-screen spinner while `loading` is `true`. Once resolved, redirects unauthenticated visitors to `/` (the login page). Authenticated users (real or demo) see the wrapped children.
+
+    ```tsx App.tsx
+    function ProtectedRoute({ children }: { children: React.ReactNode }) {
+      const { user, loading } = useAuth();
+      if (loading) {
+        return (
+          <div className="flex min-h-screen items-center justify-center bg-background">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        );
+      }
+      if (!user) return <Navigate to="/" replace />;
+      return <>{children}</>;
+    }
+    ```
+  </Tab>
+  <Tab title="PublicRoute">
+    Also renders a spinner during loading. Once resolved, redirects already-authenticated users straight to `/admin` so they never see the login form again. Unauthenticated visitors see the wrapped children (the Login page).
+
+    ```tsx App.tsx
+    function PublicRoute({ children }: { children: React.ReactNode }) {
+      const { user, loading } = useAuth();
+      if (loading) {
+        return (
+          <div className="flex min-h-screen items-center justify-center bg-background">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        );
+      }
+      if (user) return <Navigate to="/admin" replace />;
+      return <>{children}</>;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Supabase Client Configuration
+
+The Supabase client is initialised once in `src/integrations/supabase/client.ts` and imported wherever database or auth calls are needed.
+
+```typescript src/integrations/supabase/client.ts
+import { createClient } from '@supabase/supabase-js';
+import type { Database } from './types';
+
+const SUPABASE_URL            = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: {
+    storage: localStorage,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
+```
+
+<Note>
+  `persistSession: true` means the JWT is stored in `localStorage` and restored on page reload — users stay logged in across browser refreshes without re-entering credentials. `autoRefreshToken: true` silently rotates the token before it expires.
+</Note>
+
+## Profile Auto-Creation on Signup
+
+When `signUp` completes, Supabase inserts a row into `auth.users`. The `on_auth_user_created` trigger on that table calls `handle_new_user()`, which inserts a matching row into `public.profiles`:
+
+```sql supabase/migrations/20260320234404_…sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (user_id, display_name)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1))
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+The `display_name` comes from the metadata passed to `signUp`. If none was supplied the trigger falls back to the portion of the email address before `@`.
+
+## Login Page Flow
+
+<Steps>
+  <Step title="User lands on /">
+    `PublicRoute` checks `loading`. If still hydrating, a spinner is shown. Once ready, authenticated users are immediately redirected to `/admin`.
+  </Step>
+  <Step title="Choose sign-in or sign-up">
+    The Login page toggles between two form modes. Sign-up adds a **Nombre** field that populates `displayName`.
+  </Step>
+  <Step title="Submit credentials">
+    `handleSubmit` calls either `signIn(email, password)` or `signUp(email, password, displayName)`. A loading state disables the button while the Supabase request is in flight.
+  </Step>
+  <Step title="Success or error">
+    On success, `signIn` triggers `onAuthStateChange`, updating context and navigating to `/admin`. On error, the Supabase message is surfaced via `toast.error`.
+  </Step>
+  <Step title="Demo shortcut">
+    Clicking **Probar Demo** calls `enterDemo()` and navigates directly to `/admin` — no credentials needed.
+  </Step>
+</Steps>

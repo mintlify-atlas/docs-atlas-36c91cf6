@@ -1,0 +1,190 @@
+---
+title: "Service and Staff Categories: Taxonomy Reference"
+sidebarTitle: "Service Categories"
+description: "The staff_categories table groups both services and staff under a shared taxonomy. This page lists the eight default categories and explains how to add or customize them."
+---
+
+The `staff_categories` table is the single taxonomy that organizes both services and staff members inside BeautySalon. When an admin creates a new service or registers a new staff member, they pick a `category_id` from this table. That shared reference is what drives the filter chips on the Services screen and the staff-assignment dropdowns on the Appointments screen — keeping the UI consistent across every workflow. Categories are public-read so unauthenticated booking widgets can render them without requiring a login.
+
+<Tip>
+  Create your categories **before** adding services or staff. The `category_id` field on both the `services` and `staff` tables is set at creation time. While it can be updated later, front-loading your category setup avoids rework and keeps your data organized from day one.
+</Tip>
+
+---
+
+## Default Categories
+
+When BeautySalon runs in demo mode, the Admin → Categories screen pre-seeds eight categories that represent a typical full-service unisex salon. These are the exact records returned by `AdminCategories.tsx` when `isDemo` is `true`.
+
+| # | Name | Description | Icon (Lucide) |
+|---|------|-------------|---------------|
+| 1 | **Cabello** | Cortes, coloración, tratamientos capilares | `Scissors` |
+| 2 | **Uñas** | Manicure, pedicure, uñas acrílicas | `Hand` |
+| 3 | **Estética facial** | Limpiezas, hidratación, tratamientos faciales | `Sparkles` |
+| 4 | **Otros Servicios** | Barba, afeitado, perfilado | `User` |
+| 5 | **Depilación** | Cera, hilo, diferentes zonas | `Zap` |
+| 6 | **Masajes y Corporales** | Masajes relajantes, descontracturantes, exfoliación | `Heart` |
+| 7 | **Maquillaje** | Social, novias, artístico | `Palette` |
+| 8 | **Combos / Paquetes** | Paquetes especiales con múltiples servicios | `Package` |
+
+<Note>
+  Demo data is returned in-memory from `AdminCategories.tsx` and is never written to the database. When you connect your own Supabase project, the table starts empty and you build the category list that matches your salon's actual offerings.
+</Note>
+
+---
+
+## Database Schema
+
+The `staff_categories` table is intentionally lightweight — it stores just enough metadata to label and visually identify each category in the admin UI.
+
+```sql
+-- Migration: 20260411210137
+CREATE TABLE public.staff_categories (
+  id          UUID             NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  name        TEXT             NOT NULL,
+  description TEXT,
+  icon        TEXT             DEFAULT 'Scissors',
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+```
+
+<CardGroup cols={3}>
+  <Card title="name" icon="tag">
+    Required. The label displayed in filter chips, dropdowns, and the category management list.
+  </Card>
+  <Card title="description" icon="file-text">
+    Optional. A short human-readable note shown beneath the name in the Admin → Categories list to help staff understand what belongs in the category.
+  </Card>
+  <Card title="icon" icon="sparkles">
+    Optional, defaults to `"Scissors"`. Must be a valid [Lucide React](https://lucide.dev/icons/) icon name. The admin UI renders this icon as a visual indicator next to the category name.
+  </Card>
+</CardGroup>
+
+---
+
+## How Categories Drive the UI
+
+Categories are referenced from two other tables, and that reference propagates into several screens.
+
+<Tabs>
+  <Tab title="Services Screen">
+    The Admin → Services screen groups service cards by `category_id`. A row of filter chips at the top of the list renders one chip per category. Clicking a chip filters the visible services to that category only. If a service has no `category_id` (set to `NULL`), it appears under an "Uncategorised" fallback group.
+  </Tab>
+  <Tab title="Staff Screen">
+    Each staff member can be assigned to a single category (their primary speciality). The Admin → Staff list displays the category name as a badge on each staff card, making it easy to scan which team members cover which disciplines.
+  </Tab>
+  <Tab title="Appointments Screen">
+    When a new appointment is created, the service picker first filters by category, then shows the matching services within that category. This two-step selection reduces dropdown noise in salons with many services.
+  </Tab>
+</Tabs>
+
+---
+
+## Adding and Managing Categories
+
+### Via the Admin UI
+
+The recommended way to manage categories is the built-in **Admin → Categories** screen.
+
+<Steps>
+  <Step title="Open Admin → Categories">
+    Log in to BeautySalon and navigate to the **Categorías** section in the admin sidebar.
+  </Step>
+  <Step title="Fill in the form">
+    Enter a **Name** (required) and an optional **Description**. Select an icon from the available set: `Scissors`, `Sparkles`, `Heart`, `Star`, `Zap`, `Flower`.
+  </Step>
+  <Step title="Save">
+    Click **Crear**. The new category appears immediately in the list below the form and is available in all service and staff pickers.
+  </Step>
+  <Step title="Edit or delete">
+    Click the pencil icon on any row to edit its name, description, or icon. Click the trash icon to delete it. Deleting a category sets `category_id` to `NULL` on any services or staff that referenced it (via `ON DELETE SET NULL`).
+  </Step>
+</Steps>
+
+### Via Supabase SQL (Direct Insert)
+
+If you are seeding a new environment or want to script category setup, you can insert rows directly. The following example inserts all eight default categories in a single statement.
+
+```sql
+INSERT INTO public.staff_categories (name, description, icon)
+VALUES
+  ('Cabello',              'Cortes, coloración, tratamientos capilares',        'Scissors'),
+  ('Uñas',                 'Manicure, pedicure, uñas acrílicas',                'Hand'),
+  ('Estética facial',      'Limpiezas, hidratación, tratamientos faciales',      'Sparkles'),
+  ('Otros Servicios',      'Barba, afeitado, perfilado',                         'User'),
+  ('Depilación',           'Cera, hilo, diferentes zonas',                       'Zap'),
+  ('Masajes y Corporales', 'Masajes relajantes, descontracturantes, exfoliación','Heart'),
+  ('Maquillaje',           'Social, novias, artístico',                          'Palette'),
+  ('Combos / Paquetes',    'Paquetes especiales con múltiples servicios',        'Package');
+```
+
+To insert a single custom category — for example, a nail-art speciality not in the default list:
+
+```sql
+INSERT INTO public.staff_categories (name, description, icon)
+VALUES ('Nail Art', 'Diseños artísticos, piedras, stamping', 'Sparkles');
+```
+
+### Via the Supabase Client SDK
+
+From your own application code or a Supabase Edge Function, use the typed client:
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+const { data, error } = await supabase
+  .from("staff_categories")
+  .insert({
+    name: "Nail Art",
+    description: "Diseños artísticos, piedras, stamping",
+    icon: "Sparkles",
+  })
+  .select()
+  .single();
+
+if (error) {
+  console.error("Failed to create category:", error.message);
+} else {
+  console.log("Created:", data.id, data.name);
+}
+```
+
+<Warning>
+  INSERT and UPDATE operations on `staff_categories` require the `authenticated` Supabase role. Calls made with the `anon` key will be rejected by RLS. Make sure the user is signed in before running mutations from client-side code.
+</Warning>
+
+---
+
+## Cascading Behaviour
+
+Understanding what happens when a category is deleted prevents accidental data loss.
+
+<CardGroup cols={2}>
+  <Card title="services.category_id" icon="scissors">
+    Defined as `REFERENCES public.staff_categories(id) ON DELETE SET NULL`. Deleting a category sets `category_id` to `NULL` on all services in that category. The services themselves are not deleted.
+  </Card>
+  <Card title="staff.category_id" icon="users">
+    Also `ON DELETE SET NULL`. Staff members lose their category assignment but remain in the database. Re-assign them to a new category from the Admin → Staff edit form.
+  </Card>
+</CardGroup>
+
+---
+
+## Frequently Asked Questions
+
+<Accordion title="Can a service belong to more than one category?">
+  Not with the current schema. `services.category_id` is a single foreign key. If you need multi-category tagging, add a junction table (e.g., `service_category_map`) and update the query logic accordingly.
+</Accordion>
+
+<Accordion title="Can I rename a category after services have been linked to it?">
+  Yes. Updating `staff_categories.name` does not affect the foreign key relationship — existing services and staff members continue to reference the same UUID. The new name will appear everywhere the category is displayed as soon as the updated row is fetched.
+</Accordion>
+
+<Accordion title="What icon names are accepted?">
+  The admin UI exposes a curated picker: `Scissors`, `Sparkles`, `Heart`, `Star`, `Zap`, `Flower`. The `icon` column is a plain `TEXT` field, so you can store any valid [Lucide React](https://lucide.dev/icons/) icon name via SQL or the SDK. Icons not in the curated list will only render correctly if you extend the icon-rendering component in your frontend.
+</Accordion>
+
+<Accordion title="Are categories shared across multiple salon owners?">
+  No. The `staff_categories` table has no `user_id` column, so its rows are shared across all authenticated users of the same Supabase project. In a multi-tenant deployment where each salon owner has their own Supabase project, categories are naturally isolated. If you run a single shared project for multiple tenants, you would need to add a `user_id` column and update the RLS policies accordingly.
+</Accordion>

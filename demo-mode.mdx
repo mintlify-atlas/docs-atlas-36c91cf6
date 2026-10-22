@@ -1,0 +1,183 @@
+---
+title: "Explore BeautySalon with Demo Mode — No Setup Required"
+sidebarTitle: "Demo Mode"
+description: "Demo Mode lets you explore every screen of BeautySalon with realistic sample data — no Supabase account or configuration needed. Write operations are disabled."
+---
+
+Demo Mode is a built-in client-side feature that lets anyone evaluate BeautySalon without creating a Supabase project, copying environment variables, or running migrations. When active, the app bypasses all Supabase API calls and serves hardcoded, realistic sample data directly in the browser. Every screen in the admin panel is fully navigable, so you can get a genuine feel for the workflow before committing to a self-hosted deployment.
+
+<Tip>
+  The easiest way to try Demo Mode is through the hosted live demo at [beautysalonsaas.netlify.app](https://beautysalonsaas.netlify.app). Click **Probar Demo** on the login page and you are in instantly.
+</Tip>
+
+## How to Enter Demo Mode
+
+Demo Mode is activated from the login page with a single click.
+
+<Steps>
+  <Step title="Open the Login Page">
+    Navigate to the root URL of your BeautySalon instance — either the [live demo](https://beautysalonsaas.netlify.app) or your local dev server at `http://localhost:8080`.
+  </Step>
+  <Step title="Click 'Probar Demo'">
+    Below the sign-in form and the divider, click the golden **Probar Demo** button. No email or password is required.
+  </Step>
+  <Step title="Explore the Admin Panel">
+    You are immediately redirected to `/admin` and logged in as the demo user (`admin@salon.app`). A **DEMO** badge appears in the top-right corner of the Dashboard header to indicate the active mode.
+  </Step>
+</Steps>
+
+## How It Works
+
+Demo Mode is implemented entirely inside the `AuthProvider` in `src/hooks/useAuth.tsx`. Calling `enterDemo()` sets a synthetic `DEMO_USER` object as the current user and raises the `isDemo` flag to `true` — without ever contacting Supabase.
+
+```tsx src/hooks/useAuth.tsx
+const DEMO_USER = {
+  id: "demo-user-id",
+  email: "admin@salon.app",
+  user_metadata: { display_name: "Admin Demo" },
+} as unknown as User;
+
+const enterDemo = () => { setUser(DEMO_USER); setIsDemo(true); };
+```
+
+The `isDemo` boolean is exposed through the `AuthContextType` interface and is consumed by every data-fetching hook across the admin components:
+
+```tsx src/hooks/useAuth.tsx
+interface AuthContextType {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  isDemo: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, displayName: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  enterDemo: () => void;
+}
+```
+
+Signing out while in Demo Mode also never calls Supabase — `signOut()` simply clears the synthetic user and resets the flag:
+
+```tsx src/hooks/useAuth.tsx
+const signOut = async () => {
+  if (isDemo) { setUser(null); setIsDemo(false); return; }
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+};
+```
+
+## What Is Available in Demo Mode
+
+Every screen in the admin panel is accessible and populated with realistic sample data. The `isDemo` guard inside each TanStack Query `queryFn` returns the hardcoded dataset instead of making a Supabase request.
+
+<CardGroup cols={2}>
+  <Card title="Dashboard" icon="chart-bar">
+    Shows 7 KPI cards with sample counts: 5 total appointments, 8 active staff, 12 services, COP $385,000 in revenue, and status breakdowns for pending, confirmed, and cancelled.
+  </Card>
+  <Card title="Appointments" icon="calendar">
+    Two sample appointments are shown — one for "Juan Pérez" (Corte de Cabello, pending) and one for "Laura Silva" (Manicura, confirmed) — with all filter tabs functional.
+  </Card>
+  <Card title="Services" icon="scissors">
+    The full demo catalog of 45 services across 8 categories (Cabello, Uñas, Estética facial, Depilación, Masajes y Corporales, Maquillaje, Otros Servicios, Combos / Paquetes) is displayed with COP price ranges and durations.
+  </Card>
+  <Card title="Staff" icon="users">
+    Sample staff members with assigned specialties and active status are listed. Staff availability indicators are visible in the appointment booking form.
+  </Card>
+  <Card title="Categories" icon="folder">
+    All 8 service categories are shown and browsable.
+  </Card>
+  <Card title="Dark Mode" icon="moon">
+    The theme toggle in the sidebar works normally in Demo Mode, switching between light and dark appearances.
+  </Card>
+</CardGroup>
+
+## What Is NOT Available in Demo Mode
+
+Write operations are intentionally blocked. Any action that would normally call Supabase to create, update, or delete a record shows an info toast instead.
+
+<Warning>
+  No changes made while in Demo Mode are persisted anywhere. There is no database behind Demo Mode — all data lives only in memory for the duration of your browser session. Refreshing the page resets everything.
+</Warning>
+
+The following operations are disabled and show the toast message **"No disponible en modo demo"**:
+
+<AccordionGroup>
+  <Accordion title="Appointments">
+    - Creating a new appointment via the **Nueva Cita** form
+    - Updating an appointment status (confirm, complete, or cancel)
+    - Client NIT/cédula lookup (the debounced `lookupClient` call is skipped when `isDemo` is `true`)
+  </Accordion>
+  <Accordion title="Services">
+    - Creating a new service
+    - Editing an existing service
+    - Deleting a service
+  </Accordion>
+  <Accordion title="Staff">
+    - Adding a new staff member
+    - Editing staff details or category assignments
+    - Deactivating a staff member
+  </Accordion>
+  <Accordion title="Categories">
+    - Creating, renaming, or deleting service categories
+  </Accordion>
+</AccordionGroup>
+
+## The `isDemo` Flag in the Codebase
+
+The `isDemo` boolean is the single source of truth used across all admin components to branch between demo data and live Supabase queries. A representative pattern from `AdminAppointments.tsx` shows how every `queryFn` applies the guard:
+
+```tsx src/components/admin/AdminAppointments.tsx
+const { data: appointments } = useQuery({
+  queryKey: ["admin-appointments", filter],
+  queryFn: async () => {
+    if (isDemo) {
+      const demoData = [
+        {
+          id: "1",
+          client_name: "Juan Pérez",
+          client_phone: "+1234",
+          client_email: "juan@test.com",
+          appointment_date: new Date().toISOString().split("T")[0],
+          appointment_time: "10:00",
+          status: "pending",
+          notes: "",
+          services: { name: "Corte de Cabello", price: 25 },
+          staff: { name: "María García" },
+        },
+        {
+          id: "2",
+          client_name: "Laura Silva",
+          client_phone: "+5678",
+          client_email: null,
+          appointment_date: new Date().toISOString().split("T")[0],
+          appointment_time: "14:30",
+          status: "confirmed",
+          notes: "",
+          services: { name: "Manicura", price: 15 },
+          staff: { name: "Ana Martínez" },
+        },
+      ];
+      return filter === "all"
+        ? demoData
+        : demoData.filter((a) => a.status === filter);
+    }
+    // Live Supabase query follows...
+    let query = supabase
+      .from("appointments")
+      .select("*, services(name, price_min, price_max), staff(name)")
+      .order("appointment_date", { ascending: false });
+    if (filter !== "all") query = query.eq("status", filter);
+    const { data } = await query.limit(100);
+    return data || [];
+  },
+});
+```
+
+The same `if (isDemo) { toast.info("No disponible en modo demo"); return; }` guard appears at the top of every mutation handler — `updateStatus`, `handleCreate`, `handleSave`, `handleDelete` — across all admin components.
+
+## Exiting Demo Mode
+
+To leave Demo Mode, click the **Sign Out** button in the sidebar (or navigate directly to `/`). The `signOut()` function clears the synthetic session and returns you to the login page, where you can sign in with a real Supabase account.
+
+<Card title="Ready to Set Up Your Own Instance?" icon="rocket" href="/quickstart">
+  Follow the Quickstart guide to clone the repo, connect a Supabase project, and run the dev server with real data in under 10 minutes.
+</Card>

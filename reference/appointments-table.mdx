@@ -1,0 +1,347 @@
+---
+title: "appointments Table: Schema, Columns, and RLS Policies"
+sidebarTitle: "appointments"
+description: "The appointments table stores all salon bookings. Columns cover client identity, NIT/cédula, service and staff FK references, date/time, and a four-state status field."
+---
+
+The `appointments` table is the operational heart of BeautySalon. Every booking — whether created by a staff member through the admin dashboard or submitted through a public-facing form — lands in this table. Client identity is stored inline (name, phone, email, address, NIT/cédula) so that appointments remain readable even if the corresponding `clients` record is later modified. The `service_id` and `staff_id` columns are nullable foreign keys that reference the `services` and `staff` tables respectively; setting them to `NULL` via `ON DELETE SET NULL` ensures appointments survive catalog changes.
+
+---
+
+## TypeScript Row Type
+
+The following type is auto-generated from your Supabase project and exported from `src/integrations/supabase/types.ts`:
+
+```typescript
+type AppointmentRow = {
+  id: string                 // uuid
+  client_name: string
+  client_phone: string | null
+  client_email: string | null
+  nit_cedula: string | null
+  direccion: string | null
+  service_id: string | null  // uuid → services.id
+  staff_id: string | null    // uuid → staff.id
+  appointment_date: string   // date string "YYYY-MM-DD"
+  appointment_time: string   // time string "HH:MM:SS"
+  status: string             // 'pending' | 'confirmed' | 'completed' | 'cancelled'
+  notes: string | null
+  created_at: string         // timestamptz
+  updated_at: string         // timestamptz
+}
+```
+
+---
+
+## Column Reference
+
+<ResponseField name="id" type="uuid" required>
+  Primary key. Generated server-side with `gen_random_uuid()`. Never supply this in an INSERT — Supabase assigns it automatically.
+</ResponseField>
+
+<ResponseField name="client_name" type="text" required>
+  Full name or business name (*razón social*) of the client. Required at booking time. Maximum length is unrestricted at the database level.
+</ResponseField>
+
+<ResponseField name="client_phone" type="text">
+  Client phone number. Was `NOT NULL` in the original schema; made nullable in migration `20260411220452`. Store in E.164 format (e.g., `+573001234567`) for consistency, though the column has no format constraint.
+</ResponseField>
+
+<ResponseField name="client_email" type="text">
+  Client email address. Nullable. No uniqueness constraint on this column — the same email may appear in multiple appointments.
+</ResponseField>
+
+<ResponseField name="nit_cedula" type="text">
+  Colombian national tax ID (NIT) or national identity document number (Cédula). Nullable. When provided, the application upserts a matching record in the `clients` table using this value as the conflict key. This is the only logical join between `appointments` and `clients`.
+</ResponseField>
+
+<ResponseField name="direccion" type="text">
+  Client's physical address. Nullable. Added in migration `20260411220452`.
+</ResponseField>
+
+<ResponseField name="service_id" type="uuid">
+  Foreign key → `services.id`. Nullable. Set to `NULL` automatically if the referenced service is deleted (`ON DELETE SET NULL`). Query the `services` table by joining on this column to retrieve service name and price range.
+</ResponseField>
+
+<ResponseField name="staff_id" type="uuid">
+  Foreign key → `staff.id`. Nullable. Set to `NULL` automatically if the referenced staff member is deleted (`ON DELETE SET NULL`). The admin appointment list joins on this column using `staff(name)`.
+</ResponseField>
+
+<ResponseField name="appointment_date" type="text (date)" required>
+  Date of the appointment stored as a PostgreSQL `DATE` and serialised to a `"YYYY-MM-DD"` string by the Supabase JS client. Always use this ISO 8601 format when inserting or filtering.
+</ResponseField>
+
+<ResponseField name="appointment_time" type="text (time)" required>
+  Time of the appointment stored as a PostgreSQL `TIME` and serialised to a `"HH:MM:SS"` string. The booking form uses `"HH:MM"` input but the database stores full precision including seconds.
+</ResponseField>
+
+<ResponseField name="status" type="text" required>
+  Appointment lifecycle state. Constrained by a `CHECK` to one of four values. Defaults to `'pending'` on insert.
+
+  | Value | UI Label (es) | Meaning |
+  |-------|--------------|---------|
+  | `pending` | Programada | Appointment created, awaiting confirmation |
+  | `confirmed` | En Proceso | Appointment confirmed; service in progress |
+  | `completed` | Completada | Service delivered; appointment closed |
+  | `cancelled` | Cancelada | Appointment cancelled by staff |
+</ResponseField>
+
+<ResponseField name="notes" type="text">
+  Free-text observations or special instructions for the appointment. Nullable. Displayed in the admin appointment card but not used in any filtering logic.
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamptz" required>
+  Server-set timestamp of row creation. Defaults to `now()`. Pass as optional in an Insert type — Supabase sets it automatically.
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamptz" required>
+  Automatically updated by the `update_appointments_updated_at` trigger on every `UPDATE`. Do not set this manually.
+</ResponseField>
+
+---
+
+## Status Lifecycle
+
+Appointments move through a linear state machine. The admin dashboard enforces the valid transitions shown below:
+
+```
+                ┌─────────────┐
+       create   │             │
+  ──────────────▶   pending   │
+                │             │
+                └──────┬──────┘
+                       │ confirm (admin)
+                       ▼
+                ┌─────────────┐
+                │             │
+                │  confirmed  │
+                │             │
+                └──────┬──────┘
+                       │ complete (admin)
+                       ▼
+                ┌─────────────┐
+                │             │
+                │  completed  │  ◀── terminal state
+                │             │
+                └─────────────┘
+
+       pending ──▶ cancelled   ◀── terminal state (admin)
+```
+
+<Note>
+  The `AdminAppointments` component only renders action buttons for valid transitions: a `pending` appointment shows **Confirm** and **Cancel** buttons; a `confirmed` appointment shows only **Complete**. Once an appointment reaches `completed` or `cancelled`, no further status changes are available through the UI.
+</Note>
+
+---
+
+## Foreign Key Relationships
+
+```sql
+-- appointments → services
+CONSTRAINT appointments_service_id_fkey
+  FOREIGN KEY (service_id) REFERENCES public.services(id)
+  ON DELETE SET NULL
+
+-- appointments → staff
+CONSTRAINT appointments_staff_id_fkey
+  FOREIGN KEY (staff_id) REFERENCES public.staff(id)
+  ON DELETE SET NULL
+```
+
+Both foreign keys use `ON DELETE SET NULL`, meaning historical appointment records are preserved if a service is removed from the catalog or a staff member is deleted.
+
+---
+
+## RLS Policies
+
+The `appointments` table has four RLS policies. Note that both anonymous (`anon`) and authenticated roles can INSERT and SELECT:
+
+```sql
+-- Anyone (including unauthenticated visitors) can create appointments
+CREATE POLICY "Anyone can create appointments"
+  ON public.appointments
+  FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+-- Anyone can read all appointments
+CREATE POLICY "Anyone can view appointments"
+  ON public.appointments
+  FOR SELECT
+  USING (true);
+
+-- Only logged-in admin users can update (e.g., change status)
+CREATE POLICY "Authenticated users can update appointments"
+  ON public.appointments
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+-- Only logged-in admin users can delete
+CREATE POLICY "Authenticated users can delete appointments"
+  ON public.appointments
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+<Warning>
+  Because SELECT is open to everyone, any caller with your Supabase anon key can read all appointment records — including client names, phone numbers, and email addresses. Ensure your Supabase project's API settings restrict access appropriately for your production deployment, or add more targeted RLS predicates (e.g., filter by date range or status) if broader public exposure is undesirable.
+</Warning>
+
+---
+
+## Example Queries
+
+<Tabs>
+  <Tab title="Create an Appointment">
+    The admin form upserts the client record first, then inserts the appointment. Both operations use the Supabase JS client imported from `src/integrations/supabase/client.ts`.
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    // Step 1 — upsert the client (only when nit_cedula is provided)
+    if (formData.nit_cedula.trim()) {
+      await supabase.from("clients").upsert(
+        {
+          nit_cedula: formData.nit_cedula.trim(),
+          name: formData.client_name,
+          email: formData.client_email || null,
+          phone: formData.client_phone || null,
+          direccion: formData.direccion || null,
+        },
+        { onConflict: "nit_cedula" }
+      );
+    }
+
+    // Step 2 — insert the appointment
+    const { data, error } = await supabase.from("appointments").insert({
+      nit_cedula: formData.nit_cedula || null,
+      client_name: formData.client_name,
+      direccion: formData.direccion || null,
+      client_email: formData.client_email || null,
+      client_phone: formData.client_phone || null,
+      service_id: formData.service_id || null,
+      staff_id: formData.staff_id || null,
+      appointment_date: formData.appointment_date,
+      appointment_time: formData.appointment_time,
+      notes: formData.notes || null,
+      // status defaults to 'pending' — no need to pass it
+    });
+    ```
+  </Tab>
+  <Tab title="Update Status">
+    The admin changes appointment status by targeting the row `id`. Only authenticated users pass the RLS UPDATE policy.
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { error } = await supabase
+      .from("appointments")
+      .update({ status: "confirmed" })
+      .eq("id", appointmentId);
+
+    if (error) {
+      console.error("Status update failed:", error.message);
+    }
+    ```
+  </Tab>
+  <Tab title="List with Joins">
+    The admin appointments list fetches related service and staff names in a single query using PostgREST's embedded resource syntax:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*, services(name, price_min, price_max), staff(name)")
+      .order("appointment_date", { ascending: false })
+      .order("appointment_time", { ascending: false })
+      .limit(100);
+    ```
+
+    Each row in `data` will have the shape:
+    ```typescript
+    {
+      id: string,
+      client_name: string,
+      appointment_date: string,
+      appointment_time: string,
+      status: string,
+      services: { name: string; price_min: number; price_max: number } | null,
+      staff: { name: string } | null,
+      // ... all other appointment columns
+    }
+    ```
+  </Tab>
+  <Tab title="Filter by Date">
+    To load only today's appointments — useful for a daily schedule view:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
+
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*, services(name), staff(name)")
+      .eq("appointment_date", today)
+      .in("status", ["pending", "confirmed"])
+      .order("appointment_time", { ascending: true });
+    ```
+  </Tab>
+  <Tab title="Staff Availability">
+    The booking form polls this query every 15 seconds to show how many active appointments each staff member has on the selected date:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data } = await supabase
+      .from("appointments")
+      .select("staff_id, status")
+      .eq("appointment_date", formData.appointment_date)
+      .in("status", ["pending", "confirmed"]);
+
+    // Build a map: staffId → { total, busy }
+    const map: Record<string, { total: number; busy: boolean }> = {};
+    (data ?? []).forEach((a) => {
+      if (!a.staff_id) return;
+      if (!map[a.staff_id]) map[a.staff_id] = { total: 0, busy: false };
+      map[a.staff_id].total++;
+      if (a.status === "confirmed") map[a.staff_id].busy = true;
+    });
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## SQL Definition (Current State)
+
+The table was created in migration `20260411210137` and later amended by migrations `20260411220452`. The effective DDL is:
+
+```sql
+CREATE TABLE public.appointments (
+  id               UUID  NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  client_name      TEXT  NOT NULL,
+  client_phone     TEXT,                          -- nullable since 20260411220452
+  client_email     TEXT,
+  nit_cedula       TEXT,                          -- added in 20260411220452
+  direccion        TEXT,                          -- added in 20260411220452
+  service_id       UUID  REFERENCES public.services(id) ON DELETE SET NULL,
+  staff_id         UUID  REFERENCES public.staff(id)    ON DELETE SET NULL,
+  appointment_date DATE  NOT NULL,
+  appointment_time TIME  NOT NULL,
+  status           TEXT  NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending', 'confirmed', 'cancelled', 'completed')),
+  notes            TEXT,
+  created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_appointments_updated_at
+  BEFORE UPDATE ON public.appointments
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```

@@ -1,0 +1,178 @@
+---
+title: "Self-Host BeautySalon with Supabase and Node.js"
+sidebarTitle: "Setup"
+description: "Clone BeautySalon, configure your Supabase credentials, run the database migrations, and deploy the Vite SPA to any static host in minutes."
+---
+
+BeautySalon is a Vite-powered React SPA with zero server-side runtime — all business logic lives in the browser and communicates directly with Supabase. This means you can host it on any static file service (Netlify, Vercel, GitHub Pages, an S3 bucket, or your own Nginx) without managing a Node.js process in production. The only backend you need is a free Supabase project.
+
+## Prerequisites
+
+Before you begin, make sure you have the following available on your development machine.
+
+<CardGroup cols={3}>
+  <Card title="Node.js 18+" icon="node-js">
+    The project is built with Vite 5 and requires Node.js 18 or later. Check your version with `node -v`.
+  </Card>
+  <Card title="Git" icon="code-branch">
+    Used to clone the repository. Any recent version of Git works.
+  </Card>
+  <Card title="Supabase Account" icon="database">
+    A free Supabase project provides Postgres, Auth, and Storage. Sign up at [supabase.com](https://supabase.com).
+  </Card>
+</CardGroup>
+
+## Step-by-Step Setup
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork the repo on GitHub so you have your own copy to deploy from, then clone it locally.
+
+    ```bash
+    git clone https://github.com/valencastrillon/beautysalon.git
+    cd beautysalon
+    ```
+
+    If you forked first, replace the URL with your own fork's address.
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all Node.js dependencies. The project uses **npm** by default, but **bun** also works if you prefer a faster install.
+
+    <CodeGroup>
+      ```bash npm
+      npm install
+      ```
+
+      ```bash bun
+      bun install
+      ```
+    </CodeGroup>
+
+    The lockfile (`package-lock.json`) is committed to the repo, so npm will produce a deterministic install.
+  </Step>
+
+  <Step title="Create a Supabase project">
+    1. Go to [https://supabase.com](https://supabase.com) and sign in.
+    2. Click **New project**, choose a name (e.g. `beautysalon`), select a region close to your users, and set a strong database password.
+    3. Wait about 60 seconds for provisioning to complete.
+    4. Navigate to **Project Settings → API**. You will need the **Project URL** and the **anon / public** key in the next step.
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the `.env` file (or create a new `.env` at the project root) and fill in your Supabase credentials.
+
+    ```bash
+    cp .env .env.local
+    ```
+
+    Open `.env.local` and set both variables:
+
+    ```env .env.local
+    VITE_SUPABASE_URL="https://<your-project-ref>.supabase.co"
+    VITE_SUPABASE_PUBLISHABLE_KEY="<your-anon-public-key>"
+    ```
+
+    <Note>
+      The `VITE_` prefix is required. Vite only exposes environment variables that start with `VITE_` to client-side code. Variables without the prefix are never bundled into the browser build. See the [Environment Variables](/self-hosting/environment) page for full details.
+    </Note>
+  </Step>
+
+  <Step title="Apply database migrations">
+    BeautySalon's Postgres schema is defined in five SQL migration files. You must apply them in chronological order before the app can read or write any data. See the [Database Migrations](/self-hosting/database) guide for step-by-step instructions on using the Supabase dashboard SQL editor or the Supabase CLI.
+  </Step>
+
+  <Step title="Start the development server">
+    Launch the Vite development server with hot module replacement.
+
+    ```bash
+    npm run dev
+    ```
+
+    Vite will start on port **8080** by default (configured in `vite.config.ts`). Open [http://localhost:8080](http://localhost:8080) in your browser.
+
+    ```
+    VITE v5.x.x  ready in 500ms
+
+      ➜  Local:   http://localhost:8080/
+      ➜  Network: http://0.0.0.0:8080/
+    ```
+  </Step>
+
+  <Step title="Build for production and deploy">
+    When you are ready to deploy, create an optimized production bundle. The output lands in the `dist/` folder, which is a completely self-contained set of static files.
+
+    ```bash
+    npm run build
+    ```
+
+    Preview the production build locally before deploying:
+
+    ```bash
+    npm run preview
+    ```
+
+    Then upload the `dist/` folder to your hosting provider of choice (see [Deployment Options](#deployment-options) below).
+  </Step>
+</Steps>
+
+## Available npm Scripts
+
+The following scripts are defined in `package.json`:
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `vite` | Start the local development server at `localhost:8080` with HMR |
+| `build` | `vite build` | Production build — output to `dist/` |
+| `build:dev` | `vite build --mode development` | Build with development mode flags (useful for debugging) |
+| `preview` | `vite preview` | Serve the `dist/` folder locally to preview the production build |
+| `lint` | `eslint .` | Run ESLint across the entire codebase |
+| `test` | `vitest run` | Run the Vitest test suite once |
+| `test:watch` | `vitest` | Run Vitest in interactive watch mode |
+
+## Deployment Options
+
+<Note>
+  BeautySalon is a **pure client-side SPA** — there is no Node.js server to run in production. Any host that can serve static files works: Netlify, Vercel, GitHub Pages, Cloudflare Pages, AWS S3 + CloudFront, or a self-managed Nginx/Caddy server.
+</Note>
+
+### Netlify (Drag-and-Drop)
+
+The simplest option. Build locally, then drag the `dist/` folder into the Netlify dashboard.
+
+1. Run `npm run build` to generate the `dist/` folder.
+2. Go to [app.netlify.com](https://app.netlify.com) and open the **Sites** tab.
+3. Drag and drop your `dist/` folder onto the upload target.
+4. Netlify assigns a URL immediately — your app is live.
+
+### Netlify (CLI)
+
+For repeatable, scriptable deploys use the Netlify CLI.
+
+```bash
+# Install the CLI globally (one-time setup)
+npm install -g netlify-cli
+
+# Build the project
+npm run build
+
+# Deploy to a draft URL first
+netlify deploy --dir=dist
+
+# Promote to production
+netlify deploy --dir=dist --prod
+```
+
+### Vercel
+
+```bash
+# Install the Vercel CLI
+npm install -g vercel
+
+# Deploy (follow the prompts — set output directory to dist)
+vercel --prod
+```
+
+<Tip>
+  For single-page applications on Netlify or Vercel, add a redirect rule so that deep links (e.g. `/admin/appointments`) resolve correctly. On Netlify, create a `public/_redirects` file containing `/* /index.html 200`. On Vercel, add a `vercel.json` with a `rewrites` entry pointing `"source": "/(.*)"` to `"/index.html"`.
+</Tip>

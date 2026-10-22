@@ -1,0 +1,146 @@
+---
+title: "Staff Management: Availability, Specialties, and Scheduling"
+sidebarTitle: "Staff"
+description: "Register and manage salon staff — assign specialties, track real-time availability, and see today's appointment load per team member."
+---
+
+The **Staff** module is your live roster board. Every team member appears as a visual card showing their photo (or a placeholder silhouette), their specialty category, and exactly how many appointments they are carrying today — updated automatically every 30 seconds so front-desk staff always see who is free before booking a new slot.
+
+## Staff Card Layout
+
+Each staff member is represented by a compact card in a responsive grid. The card surfaces the most operationally useful information at a glance without requiring you to open any detail view.
+
+<CardGroup cols={2}>
+  <Card title="Availability Badge" icon="circle-dot">
+    A coloured pill in the top-left corner of the photo area shows one of three states: **Available** (green), **Busy** (red), or **Inactive** (grey). The badge updates in real time via the polling query.
+  </Card>
+  <Card title="Appointment Count" icon="calendar">
+    Below the staff member's name and category, the card shows the number of appointments scheduled for today — e.g. *3 citas hoy*. This counts both `pending` and `confirmed` appointments.
+  </Card>
+  <Card title="Photo Placeholder" icon="user">
+    If no `photo_url` is stored, a `User` icon fills the photo area. Photo upload is not yet wired to a storage bucket; the column is present in the `staff` table for future use.
+  </Card>
+  <Card title="Inline Actions" icon="pen-to-square">
+    Hovering a card reveals **Edit** (pencil) and **Delete** (trash) icon buttons that fade in over the photo area. This keeps the default view uncluttered.
+  </Card>
+</CardGroup>
+
+## Real-Time Availability
+
+Availability is driven by a background query that fires every **30 seconds** using TanStack Query's `refetchInterval` option:
+
+```typescript
+const { data: staffAppointments } = useQuery({
+  queryKey: ["staff-appointments-count"],
+  queryFn: async () => {
+    const today = new Date().toISOString().split("T")[0];
+    const { data } = await supabase
+      .from("appointments")
+      .select("staff_id, status")
+      .eq("appointment_date", today)
+      .in("status", ["pending", "confirmed"]);
+
+    const map: Record<string, { total: number; busy: boolean }> = {};
+    (data || []).forEach(a => {
+      if (!a.staff_id) return;
+      if (!map[a.staff_id]) map[a.staff_id] = { total: 0, busy: false };
+      map[a.staff_id].total++;
+      if (a.status === "confirmed") map[a.staff_id].busy = true;
+    });
+    return map;
+  },
+  refetchInterval: 30000,
+});
+```
+
+The query builds an in-memory map keyed by `staff_id`. Each entry tracks:
+
+- **`total`** — total appointments for today with status `pending` or `confirmed`
+- **`busy`** — `true` if any appointment has `status = 'confirmed'` (i.e. currently in service)
+
+### Helper Functions
+
+Two small helpers read from this map to power both the badge and the appointment count:
+
+```typescript
+const isBusy = (id: string) => staffAppointments?.[id]?.busy || false;
+const getAppointmentCount = (id: string) => staffAppointments?.[id]?.total || 0;
+```
+
+`isBusy()` is also used by the filter chips (see below) and by the Appointments form's staff selector, which appends a live workload label next to each staff member's name in the dropdown.
+
+<Note>
+  A staff member is marked **Busy** specifically when a `confirmed` appointment exists today — meaning they are actively in service. A `pending` appointment contributes to the count but does not flip the badge to Busy.
+</Note>
+
+## Filtering the Roster
+
+Three filter chips sit above the card grid. Selecting a chip immediately narrows the visible cards:
+
+| Chip | Behaviour |
+|------|-----------|
+| **Todos** | Shows all staff regardless of status |
+| **Ocupado** | Shows only staff where `isBusy(id) === true` |
+| **Disponible** | Shows only active staff where `isBusy(id) === false` |
+
+Inactive staff (`is_active = false`) are excluded from the **Disponible** filter but remain visible under **Todos** so you can still edit or reactivate them.
+
+## Creating and Editing a Staff Member
+
+Click **Agregar** in the top-right header to expand the inline form. Editing a card opens the same form pre-populated with the staff member's existing data.
+
+<Steps>
+  <Step title="Enter the name">
+    **Nombre** is the only required field. The save button stays disabled until at least one non-whitespace character is entered.
+  </Step>
+  <Step title="Assign a category">
+    Select a **Categoría** from the dropdown, which is populated from the `staff_categories` table — the same taxonomy used for services. This field is optional; unassigned staff display *Sin categoría* on their card.
+  </Step>
+  <Step title="Add contact details">
+    Optionally provide a **Teléfono** and **Email**. Both are stored as nullable columns (`phone`, `email`) in the `staff` table and are not displayed on the card itself, but are available for future notifications or reporting.
+  </Step>
+  <Step title="Set active status">
+    The **Activo** checkbox maps to the `is_active` boolean. Unchecking it marks the staff member as inactive — they will no longer appear in the Appointments form's staff selector and will be excluded from the Available filter.
+  </Step>
+  <Step title="Save">
+    Click **Crear** (or **Actualizar** when editing). On success the staff query and the admin stats query are both invalidated so counts on the Dashboard refresh immediately.
+  </Step>
+</Steps>
+
+### Staff Table Schema
+
+The `staff` table columns relevant to this module are:
+
+<ResponseField name="id" type="string (uuid)">
+  Auto-generated primary key.
+</ResponseField>
+<ResponseField name="name" type="string" required>
+  Full display name shown on the card and in all appointment references.
+</ResponseField>
+<ResponseField name="category_id" type="string | null">
+  Foreign key to `staff_categories.id`. Determines specialty label and, by extension, filter chip visibility.
+</ResponseField>
+<ResponseField name="phone" type="string | null">
+  Contact phone number. Stored but not currently displayed on the card.
+</ResponseField>
+<ResponseField name="email" type="string | null">
+  Contact email address.
+</ResponseField>
+<ResponseField name="photo_url" type="string | null">
+  URL to a profile photo. Falls back to a `User` icon placeholder if null.
+</ResponseField>
+<ResponseField name="is_active" type="boolean">
+  Controls visibility in the Appointments staff dropdown. Inactive staff remain in the database and continue to be shown under the **Todos** filter.
+</ResponseField>
+
+## Deleting a Staff Member
+
+Click the **Trash** icon on a staff card. A browser confirmation dialog prevents accidental deletion. After confirming, the row is hard-deleted from the `staff` table. Any existing appointments that referenced the staff member via `staff_id` are **not** deleted — the foreign key is set up as a nullable relation, so historical appointments are preserved.
+
+<Warning>
+  Deleting a staff member is permanent. Reactivating an accidentally deleted member requires re-creating the record. If you only want to stop a staff member from appearing in new bookings, use the **Inactivo** checkbox instead.
+</Warning>
+
+<Tip>
+  Use the **Categoría** field to group staff by specialty — this ties directly into the same `staff_categories` taxonomy that organises your service menu. Front-desk staff can then quickly filter the Appointments form by category to see only the staff qualified for a particular service type.
+</Tip>

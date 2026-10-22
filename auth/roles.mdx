@@ -1,0 +1,228 @@
+---
+title: "User Roles and Access Control in BeautySalon"
+sidebarTitle: "Roles & Access"
+description: "BeautySalon uses a single admin role — any authenticated Supabase user has full access. Profiles are scoped per user; salon data is shared across all admins."
+---
+
+BeautySalon operates with a **single, flat admin role**: every authenticated user has identical read and write access to all salon data — staff, services, appointments, and staff categories. There is no permissions hierarchy, no owner concept on salon records, and no per-user isolation of operational data. This model is intentional for a single-salon deployment where every login belongs to a trusted operator. Row-level security is still enabled on every table, but the policies for salon-data tables check only that the caller is authenticated (`TO authenticated`), not which user they are.
+
+<Note>
+  Multi-tenant or per-operator role separation is not currently implemented. If you deploy BeautySalon for more than one salon, all authenticated users across every salon share the same data. See the Tip below for an extension path.
+</Note>
+
+## Role Model at a Glance
+
+<CardGroup cols={2}>
+  <Card title="profiles" icon="circle-user">
+    Scoped strictly per user. SELECT, INSERT, and UPDATE are only allowed where `auth.uid() = user_id`. No other user can read or modify your profile row.
+  </Card>
+  <Card title="staff / services / appointments / staff_categories" icon="users">
+    Accessible by **any authenticated user** — policies check `TO authenticated` with no `user_id` filter. All admins share these records.
+  </Card>
+  <Card title="categories / transactions" icon="tag">
+    Scoped per user via `user_id` (legacy from the initial migration). Each authenticated user sees only their own financial categories and transactions.
+  </Card>
+  <Card title="Demo mode" icon="flask">
+    The `DEMO_USER` object (`id: "demo-user-id"`, `email: "admin@salon.app"`) is never sent to Supabase. RLS-protected writes will be rejected since no real JWT exists.
+  </Card>
+</CardGroup>
+
+## profiles Table and RLS
+
+The `profiles` table is created in the first migration alongside the `on_auth_user_created` trigger. It stores a `display_name` per authenticated user and is the only table with strict per-user RLS policies.
+
+```sql supabase/migrations/20260320234404_…sql
+-- Profiles table
+CREATE TABLE public.profiles (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID        NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  display_name TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own profile"
+  ON public.profiles FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own profile"
+  ON public.profiles FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own profile"
+  ON public.profiles FOR UPDATE
+  USING (auth.uid() = user_id);
+```
+
+Each policy uses `auth.uid() = user_id` so a user can never read or write another user's profile row. There is deliberately no DELETE policy — profiles are retained for as long as the `auth.users` row exists. Cascade deletion on `user_id` means the profile is removed automatically if the underlying auth user is deleted.
+
+### Auto-creation trigger
+
+A new `profiles` row is inserted automatically every time someone signs up, so the application code never has to create it manually:
+
+```sql supabase/migrations/20260320234404_…sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (user_id, display_name)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1))
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+`SECURITY DEFINER` means the function runs with the privileges of the user who defined it (a superuser in Supabase), bypassing RLS for this one insert. This is necessary because the new user's JWT does not yet exist at the moment the trigger fires.
+
+## Salon-Data Tables: Authenticated-Only Access
+
+The second migration creates the core operational tables. All four tables share the same RLS pattern: **open reads, authenticated writes**.
+
+<Tabs>
+  <Tab title="staff_categories">
+    ```sql supabase/migrations/20260411210137_…sql
+    CREATE POLICY "Anyone can view staff categories"
+      ON public.staff_categories FOR SELECT USING (true);
+
+    CREATE POLICY "Authenticated users can insert staff categories"
+      ON public.staff_categories FOR INSERT TO authenticated WITH CHECK (true);
+
+    CREATE POLICY "Authenticated users can update staff categories"
+      ON public.staff_categories FOR UPDATE TO authenticated USING (true);
+
+    CREATE POLICY "Authenticated users can delete staff categories"
+      ON public.staff_categories FOR DELETE TO authenticated USING (true);
+    ```
+  </Tab>
+  <Tab title="staff">
+    ```sql supabase/migrations/20260411210137_…sql
+    CREATE POLICY "Anyone can view active staff"
+      ON public.staff FOR SELECT USING (true);
+
+    CREATE POLICY "Authenticated users can insert staff"
+      ON public.staff FOR INSERT TO authenticated WITH CHECK (true);
+
+    CREATE POLICY "Authenticated users can update staff"
+      ON public.staff FOR UPDATE TO authenticated USING (true);
+
+    CREATE POLICY "Authenticated users can delete staff"
+      ON public.staff FOR DELETE TO authenticated USING (true);
+    ```
+  </Tab>
+  <Tab title="services">
+    ```sql supabase/migrations/20260411210137_…sql
+    CREATE POLICY "Anyone can view active services"
+      ON public.services FOR SELECT USING (true);
+
+    CREATE POLICY "Authenticated users can insert services"
+      ON public.services FOR INSERT TO authenticated WITH CHECK (true);
+
+    CREATE POLICY "Authenticated users can update services"
+      ON public.services FOR UPDATE TO authenticated USING (true);
+
+    CREATE POLICY "Authenticated users can delete services"
+      ON public.services FOR DELETE TO authenticated USING (true);
+    ```
+  </Tab>
+  <Tab title="appointments">
+    ```sql supabase/migrations/20260411210137_…sql
+    -- Public booking: anonymous users may create appointments
+    CREATE POLICY "Anyone can create appointments"
+      ON public.appointments FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+    CREATE POLICY "Anyone can view appointments"
+      ON public.appointments FOR SELECT USING (true);
+
+    CREATE POLICY "Authenticated users can update appointments"
+      ON public.appointments FOR UPDATE TO authenticated USING (true);
+
+    CREATE POLICY "Authenticated users can delete appointments"
+      ON public.appointments FOR DELETE TO authenticated USING (true);
+    ```
+
+    <Note>
+      Appointments grant INSERT to the `anon` role, meaning unauthenticated visitors can submit a booking request. Only authenticated admins can update or delete appointments.
+    </Note>
+  </Tab>
+</Tabs>
+
+## categories and transactions: Per-User Scoping
+
+These two tables were created in the initial migration as a personal finance tracker and retain strict per-user RLS. Unlike the salon-data tables, each row has a `user_id` column and every policy checks `auth.uid() = user_id`.
+
+```sql supabase/migrations/20260320234404_…sql
+-- categories
+CREATE POLICY "Users can view own categories"
+  ON public.categories FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert own categories"
+  ON public.categories FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own categories"
+  ON public.categories FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete own categories"
+  ON public.categories FOR DELETE USING (auth.uid() = user_id);
+
+-- transactions
+CREATE POLICY "Users can view own transactions"
+  ON public.transactions FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert own transactions"
+  ON public.transactions FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own transactions"
+  ON public.transactions FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Users can delete own transactions"
+  ON public.transactions FOR DELETE USING (auth.uid() = user_id);
+```
+
+## Demo Mode and Access Control
+
+The demo user is defined entirely in client-side code and never touches Supabase:
+
+```typescript src/hooks/useAuth.tsx
+const DEMO_USER = {
+  id: "demo-user-id",
+  email: "admin@salon.app",
+  user_metadata: { display_name: "Admin Demo" },
+} as unknown as User;
+
+const enterDemo = () => {
+  setUser(DEMO_USER);
+  setIsDemo(true);
+};
+```
+
+Because `DEMO_USER` is not a real Supabase session, the following applies in demo mode:
+
+<Accordion title="What works in demo mode">
+  - Route guards pass — `user` is non-null, so `ProtectedRoute` renders normally.
+  - Any Supabase `SELECT` query on tables with `USING (true)` policies (staff, services, appointments, staff_categories) will succeed because those policies allow anonymous reads.
+  - The dashboard and read-only views load correctly.
+</Accordion>
+
+<Accordion title="What is blocked in demo mode">
+  - Any Supabase `INSERT`, `UPDATE`, or `DELETE` on salon-data tables will be rejected with a permission error because these policies require `TO authenticated` and there is no valid JWT.
+  - Reads on `profiles`, `categories`, and `transactions` will return empty results since RLS filters by `auth.uid()`, which is `null` for unauthenticated Supabase requests.
+  - `signOut` in demo mode clears local state only — no Supabase call is made.
+</Accordion>
+
+## RLS Summary Table
+
+| Table | SELECT | INSERT | UPDATE | DELETE |
+|---|---|---|---|---|
+| `profiles` | Own row only | Own row only | Own row only | — (cascade) |
+| `staff_categories` | Anyone | Authenticated | Authenticated | Authenticated |
+| `staff` | Anyone | Authenticated | Authenticated | Authenticated |
+| `services` | Anyone | Authenticated | Authenticated | Authenticated |
+| `appointments` | Anyone | Anyone (incl. anon) | Authenticated | Authenticated |
+| `categories` | Own rows only | Own rows only | Own rows only | Own rows only |
+| `transactions` | Own rows only | Own rows only | Own rows only | Own rows only |
+
+<Tip>
+  To extend BeautySalon with multiple roles (e.g. owner vs. receptionist), consider using **Supabase custom claims** stored in the JWT. You would add a `role` column to `profiles`, write a Postgres function that reads it and adds it to `auth.jwt()` via `app_metadata`, and update RLS policies to check `(auth.jwt() ->> 'role') = 'owner'`. This approach keeps role data in the database and enforces it at the RLS layer without any frontend changes.
+</Tip>

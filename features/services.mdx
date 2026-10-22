@@ -1,0 +1,294 @@
+---
+title: "Service Catalog: Pricing, Durations, and Categories"
+sidebarTitle: "Services"
+description: "Define and manage your salon's service catalog with price ranges in COP, duration windows, buffer times, consultation flags, and category groupings."
+---
+
+The Services module is where you define everything your salon offers. Each service record specifies a name, a price range in Colombian Peso (COP), a duration window in minutes, an optional buffer time between appointments, a consultation requirement flag, and an active/inactive toggle. Services are grouped into categories drawn from the `staff_categories` table, and the category filter chips on this page let you narrow the list instantly without a round-trip to Supabase.
+
+---
+
+## Service Data Model
+
+The `services` table schema (from `src/integrations/supabase/types.ts`) defines the following columns:
+
+<ResponseField name="id" type="string (uuid)">
+  Auto-generated primary key.
+</ResponseField>
+<ResponseField name="name" type="string" required>
+  Display name of the service, e.g. `"Keratina"` or `"Manicure clásica"`.
+</ResponseField>
+<ResponseField name="description" type="string | null">
+  Optional free-text description shown in the service list and booking flow.
+</ResponseField>
+<ResponseField name="price_min" type="number" required>
+  Minimum price in COP. Also used as the revenue figure on the Dashboard KPI for completed appointments.
+</ResponseField>
+<ResponseField name="price_max" type="number">
+  Maximum price in COP. Defaults to `price_min` if not provided. When `price_min === price_max`, the UI shows a single value; otherwise it renders a range (e.g. `$25.000 – $80.000`).
+</ResponseField>
+<ResponseField name="duration_min" type="number" required>
+  Minimum service duration in minutes. Default `30`.
+</ResponseField>
+<ResponseField name="duration_max" type="number">
+  Maximum duration in minutes. Defaults to `duration_min`. Displayed as `"45 min"` or `"60–90 min"`.
+</ResponseField>
+<ResponseField name="buffer_time" type="number">
+  Cleanup or preparation minutes added after the service ends before the slot is considered free. Default `0`. Body-treatment services (e.g. massages) typically carry a value of `10`.
+</ResponseField>
+<ResponseField name="category_id" type="string (uuid) | null">
+  Foreign key to `staff_categories.id`. Determines which category chip the service appears under.
+</ResponseField>
+<ResponseField name="requires_consultation" type="boolean">
+  When `true`, an orange **Consulta** badge appears on the service card, signalling that the client must book a consultation before the service is performed.
+</ResponseField>
+<ResponseField name="is_active" type="boolean">
+  Controls visibility in the appointment booking form. Inactive services are hidden from the `service_id` dropdown but remain in the admin catalog with a grey **Inactivo** badge.
+</ResponseField>
+<ResponseField name="gender" type="string">
+  Audience flag, hardcoded to `"all"` in the current save payload, reflecting the unisex nature of the salon.
+</ResponseField>
+
+---
+
+## Service Categories
+
+Services are grouped into eight categories. The demo seed data in `AdminServices.tsx` provides a full reference catalog:
+
+<Tabs>
+  <Tab title="Cabello">
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Corte de cabello | $25.000 – $80.000 | 20–45 min |
+    | Lavado y secado | $20.000 – $45.000 | 30 min |
+    | Planchado / alisado | $35.000 – $80.000 | 45 min |
+    | Ondulado / rizado | $40.000 – $90.000 | 60 min |
+    | Hidratación capilar | $50.000 – $120.000 | 45 min |
+    | Keratina *(consulta)* | $150.000 – $350.000 | 120 min |
+    | Botox capilar *(consulta)* | $120.000 – $280.000 | 90 min |
+    | Coloración / tinte | $80.000 – $200.000 | 90 min |
+    | Mechas / highlights / balayage | $150.000 – $400.000 | 120 min |
+    | Decoloración *(consulta)* | $120.000 – $300.000 | 120 min |
+    | Permanente *(consulta)* | $100.000 – $250.000 | 120 min |
+  </Tab>
+  <Tab title="Uñas">
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Manicure clásica | $20.000 – $35.000 | 30 min |
+    | Pedicure clásica | $25.000 – $45.000 | 45 min |
+    | Manicure con esmaltado en gel / semipermanente | $35.000 – $60.000 | 45 min |
+    | Uñas acrílicas / esculpidas | $60.000 – $120.000 | 60–90 min |
+    | Nail art / decoración | $10.000 – $30.000 | 15–30 min |
+    | Retiro de uñas | $15.000 – $30.000 | 20–30 min |
+  </Tab>
+  <Tab title="Estética Facial">
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Limpieza facial profunda | $60.000 – $120.000 | 60 min |
+    | Hidratación facial | $50.000 – $100.000 | 45 min |
+    | Tratamiento anti-acné *(consulta)* | $70.000 – $150.000 | 45–60 min |
+    | Tratamiento anti-edad *(consulta)* | $80.000 – $180.000 | 45–60 min |
+    | Exfoliación facial | $35.000 – $70.000 | 30 min |
+    | Mascarillas | $25.000 – $55.000 | 30 min |
+  </Tab>
+  <Tab title="Other Categories">
+    **Depilación**
+
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Depilación con cera - piernas | $35.000 – $70.000 | 30–45 min |
+    | Depilación con cera - axilas | $15.000 – $25.000 | 10–15 min |
+    | Depilación con cera - bikini | $25.000 – $50.000 | 15–20 min |
+    | Depilación con cera - cara | $15.000 – $25.000 | 10–15 min |
+    | Depilación con hilo - cejas | $10.000 – $20.000 | 10–15 min |
+    | Depilación con hilo - labio | $8.000 – $15.000 | 5–10 min |
+
+    **Masajes y Corporales** *(buffer: 10 min)*
+
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Masaje relajante | $70.000 – $150.000 | 60 min |
+    | Masaje reafirmante | $80.000 – $160.000 | 60 min |
+    | Exfoliación corporal | $55.000 – $110.000 | 45 min |
+    | Tratamientos reductores *(consulta)* | $90.000 – $200.000 | 60–90 min |
+
+    **Maquillaje**
+
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Maquillaje social | $50.000 – $120.000 | 45–60 min |
+    | Maquillaje de novia *(consulta)* | $180.000 – $400.000 | 60–90 min |
+    | Maquillaje artístico | $100.000 – $250.000 | 60–90 min |
+    | Clases de maquillaje | $80.000 – $180.000 | 60–120 min |
+
+    **Otros Servicios**
+
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Afeitado clásico con navaja | $15.000 – $30.000 | 20 min |
+    | Arreglo de barba | $12.000 – $25.000 | 15 min |
+    | Perfilado de barba | $12.000 – $25.000 | 15 min |
+    | Corte + barba (combo) | $40.000 – $75.000 | 40–50 min |
+
+    **Combos / Paquetes**
+
+    | Service | Price Range (COP) | Duration |
+    |---------|------------------|----------|
+    | Novia completa *(consulta)* | $350.000 – $700.000 | 180–240 min |
+    | Full day spa | $300.000 – $550.000 | 240–300 min |
+    | Combo unisex (corte + barba + cejas) | $55.000 – $100.000 | 50–60 min |
+    | Combo express (corte + lavado + secado) | $50.000 – $110.000 | 60 min |
+  </Tab>
+</Tabs>
+
+---
+
+## Price and Duration Formatting
+
+All monetary values are rendered in Colombian Peso using the `es-CO` locale with zero decimal places. Duration is shown as a single value when `min === max`, or as a range otherwise:
+
+```typescript
+const fmtCOP = (v: number) =>
+  v.toLocaleString("es-CO", {
+    style: "currency",
+    currency: "COP",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+
+const formatPrice = (min: number, max: number) =>
+  min === max ? fmtCOP(min) : `${fmtCOP(min)} – ${fmtCOP(max)}`;
+
+const formatDuration = (min: number, max: number) =>
+  min === max ? `${min} min` : `${min}–${max} min`;
+```
+
+Example output: `$150.000 – $350.000` and `120 min` for the Keratina service.
+
+---
+
+## Category Filter Chips
+
+A row of pill buttons appears above the service list. Clicking any chip sets `filterCategory` to the corresponding `staff_categories.id`, which drives a client-side filter — no additional network request is made:
+
+```typescript
+const filteredServices = services?.filter(
+  s => filterCategory === "all" || s.category_id === filterCategory
+);
+```
+
+The **Todos** chip (default) disables filtering and shows all services regardless of category.
+
+---
+
+## Creating a Service
+
+Clicking the **Agregar** button in the header opens an inline form panel above the list. The form in create mode includes a `<datalist>` on the name field that autocompletes from existing service names in the catalog. When the user selects an existing name from the suggestions, the category field is automatically populated to match:
+
+```tsx
+<input
+  list="service-options"
+  value={name}
+  onChange={(e) => {
+    const val = e.target.value;
+    setName(val);
+    const match = services?.find(s => s.name === val);
+    if (match?.category_id) {
+      setCategoryId(match.category_id);
+    }
+  }}
+  placeholder="Escriba o seleccione un servicio"
+/>
+<datalist id="service-options">
+  {services?.map(s => <option key={s.id} value={s.name} />)}
+</datalist>
+```
+
+<Note>
+  The `<datalist>` autocomplete is **only shown in create mode**. When editing an existing service, the name field renders as a plain `<input>` without suggestions, preventing accidental name collisions.
+</Note>
+
+### Form Fields
+
+<CardGroup cols={2}>
+  <Card title="Descripción (name)" icon="pencil">
+    Service name. Required. In create mode uses datalist autocomplete. In edit mode renders as a plain input.
+  </Card>
+  <Card title="Categoría" icon="tag">
+    Read-only display of the resolved category name. Automatically set via the datalist match or carried over from the edited record. The underlying `category_id` is managed in state.
+  </Card>
+  <Card title="Precio mín (COP)" icon="dollar-sign">
+    Required. The `price_min` value in integer COP. Also serves as the revenue amount tracked on the Dashboard for completed appointments.
+  </Card>
+  <Card title="Precio máx (COP)" icon="trending-up">
+    Optional. Defaults to `price_min` if left blank (`Number(priceMax) || Number(priceMin)`).
+  </Card>
+  <Card title="Duración mín (min)" icon="clock">
+    Required. Minimum service time in minutes. Default `30`.
+  </Card>
+  <Card title="Duración máx (min)" icon="timer">
+    Optional. Defaults to `duration_min` if left blank. Default `30`.
+  </Card>
+  <Card title="Buffer entre citas (min)" icon="pause">
+    Cleanup or changeover time appended after the service. Default `0`. Massage and body-treatment services typically use `10`.
+  </Card>
+  <Card title="Descripción (textarea)" icon="file-text">
+    Optional long-form description of the service. Stored in `services.description`.
+  </Card>
+</CardGroup>
+
+Two checkboxes appear below the grid:
+
+- **Activo** — controls `is_active`. Unchecked services are hidden from the booking form but remain in the admin list.
+- **Requiere consulta** — controls `requires_consultation`. Checked services display an orange **Consulta** badge everywhere the service is listed.
+
+---
+
+## The `handleSave` Payload
+
+On save (create or update), `handleSave` constructs the following payload and sends it to Supabase. The `gender` field is always `"all"`, reflecting the salon's unisex positioning:
+
+```typescript
+const payload = {
+  name: name.trim(),
+  description: description.trim() || null,
+  price_min: Number(priceMin),
+  price_max: Number(priceMax) || Number(priceMin),
+  duration_min: Number(durationMin),
+  duration_max: Number(durationMax) || Number(durationMin),
+  category_id: categoryId || null,
+  gender: "all",
+  requires_consultation: requiresConsultation,
+  buffer_time: Number(bufferTime),
+  is_active: isActive,
+};
+
+if (editing) {
+  // UPDATE existing row
+  const { error } = await supabase
+    .from("services")
+    .update(payload)
+    .eq("id", editing.id);
+} else {
+  // INSERT new row
+  const { error } = await supabase
+    .from("services")
+    .insert(payload);
+}
+```
+
+Both branches invalidate `["admin-services"]` and `["admin-stats"]` query caches on success, so the service list and dashboard KPIs update immediately.
+
+---
+
+## Toggling Active Status
+
+A service can be made inactive by editing it and unchecking the **Activo** checkbox, then saving. Inactive services:
+
+- Show a grey **Inactivo** badge in the admin service list.
+- Are excluded from the `services` dropdown in the appointment creation form (the query adds `.eq("is_active", true)`).
+- Are excluded from the **Servicios** KPI count on the Dashboard (same `is_active = true` filter).
+
+<Tip>
+  Deactivating a service rather than deleting it preserves the historical link between past `appointments` rows and the `service_id` foreign key. Deletion removes the service record entirely and could leave orphaned appointment rows without a service name.
+</Tip>

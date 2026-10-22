@@ -1,0 +1,100 @@
+---
+title: "BeautySalon: Beauty Salon Management SaaS Platform"
+sidebarTitle: "Introduction"
+description: "BeautySalon is an open-source SaaS platform for unisex beauty salons. Manage appointments, services, staff, and clients with a Supabase-powered admin panel."
+---
+
+Running a modern beauty salon means juggling appointments, tracking staff availability, pricing a broad menu of services, and keeping a clean record of every client visit — all while staying focused on the actual work. BeautySalon is an open-source, full-stack SaaS application built to handle all of that in one place. It ships with a polished admin panel that connects directly to a Supabase backend, giving salon owners real-time visibility into their operations from any device without the cost or complexity of proprietary salon software.
+
+## The Problem It Solves
+
+Small-to-medium salon owners typically wrestle with one of two bad options: paper-and-spreadsheet chaos, or expensive all-in-one platforms that lock data in proprietary silos. BeautySalon offers a third path — a self-hosted, open-source platform you can deploy in minutes to your own Supabase project, with full ownership of the database and the freedom to modify every line of code.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Dashboard KPIs" icon="chart-bar">
+    At-a-glance metrics for appointments, revenue, active staff, and services — filterable by today, the last 7 days, or the current month.
+  </Card>
+  <Card title="Appointment Booking" icon="calendar">
+    Create, filter, and update appointments with client lookup by NIT/cédula, staff availability indicators, and four lifecycle statuses: Programada, En Proceso, Completada, Cancelada.
+  </Card>
+  <Card title="Service Catalog" icon="scissors">
+    Manage 40+ pre-loaded services across 8 categories (hair, nails, facials, massage, waxing, makeup, and more) with COP price ranges and per-service duration and buffer times.
+  </Card>
+  <Card title="Staff Management" icon="users">
+    Add and deactivate staff members, assign specialty categories, and see real-time per-day workload directly inside the appointment booking form.
+  </Card>
+  <Card title="Client History" icon="address-book">
+    Persistent client records keyed by NIT or cédula auto-populate appointment forms on repeat visits, reducing data-entry friction.
+  </Card>
+  <Card title="Demo Mode" icon="play">
+    Explore every screen with realistic hardcoded data — no Supabase account required. Ideal for evaluating the platform before deploying your own instance.
+  </Card>
+  <Card title="Dark Mode" icon="moon">
+    Full light/dark theme support powered by `next-themes`, toggled from the sidebar with no extra configuration.
+  </Card>
+  <Card title="RLS Security" icon="shield">
+    Every Supabase table is protected by Row-Level Security policies so that only authenticated users can read or mutate salon data.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+BeautySalon is built on a modern, well-supported open-source stack with no proprietary dependencies:
+
+| Layer | Technology |
+|---|---|
+| Frontend framework | React 18 + TypeScript |
+| Build tool | Vite 5 |
+| Backend / database | Supabase (PostgreSQL + Auth + RLS) |
+| Data fetching | TanStack Query v5 |
+| Routing | React Router v6 |
+| UI components | Tailwind CSS + shadcn/ui (Radix UI primitives) |
+| Charts | Recharts |
+| Forms | React Hook Form + Zod |
+| Notifications | Sonner |
+| Date utilities | date-fns |
+
+## Architecture Overview
+
+BeautySalon follows a straightforward single-page application architecture. The React frontend runs entirely in the browser and communicates with Supabase over its auto-generated REST and Realtime APIs. There is no custom server-side layer — Supabase handles authentication, row-level authorization, and data persistence. TanStack Query manages all remote state on the client, providing caching, background refetching, and optimistic updates out of the box.
+
+```
+Browser (React SPA)
+  └─ React Router v6          ← URL-based routing, protected routes
+  └─ AuthProvider (useAuth)   ← Supabase session + demo flag
+  └─ TanStack Query           ← Data fetching & cache
+       └─ Supabase JS Client  ← REST / Realtime to Supabase
+            └─ PostgreSQL     ← Tables: appointments, services, staff,
+                                        clients, staff_categories
+            └─ Supabase Auth  ← Email/password sessions + JWT
+            └─ RLS Policies   ← Per-table row-level authorization
+```
+
+The entire admin panel lives under the `/admin/*` route, which is wrapped in a `ProtectedRoute` component that redirects unauthenticated visitors to the login page. Entering Demo Mode bypasses Supabase entirely and injects a synthetic user into the auth context.
+
+## Live Demo
+
+You can explore a fully deployed instance of BeautySalon — no account or configuration required — at the live demo site:
+
+<Card title="Open the Live Demo" icon="arrow-up-right-from-square" href="https://beautysalonsaas.netlify.app">
+  Click **Probar Demo** on the login page to enter Demo Mode and explore every screen with sample data.
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, wire up a Supabase project, and run the dev server locally in under 10 minutes.
+  </Card>
+  <Card title="Demo Mode" icon="play" href="/demo-mode">
+    Skip the setup entirely and learn how Demo Mode works — what's available, what's blocked, and how it's implemented.
+  </Card>
+  <Card title="Self-Hosting Setup" icon="server" href="/self-hosting/setup">
+    Step-by-step guide to deploying BeautySalon to production on your own infrastructure.
+  </Card>
+  <Card title="Dashboard" icon="chart-bar" href="/features/dashboard">
+    Deep dive into the KPI dashboard — filters, metrics, and how stats are calculated from live data.
+  </Card>
+</CardGroup>

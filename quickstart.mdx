@@ -1,47 +1,174 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with BeautySalon in Under 10 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone BeautySalon, connect a Supabase project, run migrations, and launch the dev server. Get a working beauty salon management app in under 10 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through running BeautySalon on your own machine from a fresh clone to a fully working local instance. By the end you will have the admin panel running at `http://localhost:8080`, connected to your own Supabase project with all tables and RLS policies applied.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  Want to explore the UI before committing to any setup? [Demo Mode](/demo-mode) lets you browse every screen with sample data — no Supabase account or environment variables needed.
+</Note>
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you start, make sure the following are available on your machine:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+<CardGroup cols={3}>
+  <Card title="Node.js 18+" icon="node-js">
+    BeautySalon uses Vite 5 and TanStack Query v5. Node 18 or newer is required. Run `node -v` to check your version.
+  </Card>
+  <Card title="Supabase Project" icon="database">
+    A free Supabase account and a new project. You will need the **Project URL** and **anon public key** from the API settings page.
+  </Card>
+  <Card title="Git" icon="code-branch">
+    Git must be installed to clone the repository. Run `git --version` to verify.
+  </Card>
+</CardGroup>
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Clone the Repository">
+    Open a terminal and clone the BeautySalon repository from GitHub:
 
     ```bash
-    npm install your-package
+    git clone https://github.com/valencastrillon/beautysalon.git
+    cd beautysalon
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Install Dependencies">
+    Install all Node.js dependencies. BeautySalon supports both npm and Bun:
+
+    <CodeGroup>
+      ```bash npm
+      npm install
+      ```
+
+      ```bash bun
+      bun install
+      ```
+    </CodeGroup>
+
+    Key packages installed include React 18, TanStack Query v5, React Router v6, the Supabase JS client, shadcn/ui components, and Recharts.
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    The repository ships with a `.env` file that points to the project's own demo Supabase instance. Copy it to `.env.local` and replace the values with your own project credentials:
 
     ```bash
-    your-cli init
+    cp .env .env.local
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+    Then open `.env.local` and update the three variables:
+
+    ```ini .env.local
+    VITE_SUPABASE_PROJECT_ID="your-project-id"
+    VITE_SUPABASE_PUBLISHABLE_KEY="your-anon-key"
+    VITE_SUPABASE_URL="https://your-project-id.supabase.co"
     ```
+
+    <Tip>
+      Find your **Project URL** and **anon public key** in the Supabase dashboard under **Project Settings → API**. The anon key is the long JWT labelled *Project API Keys → anon public*.
+    </Tip>
+
+    <Warning>
+      Never commit your `.env.local` file to version control. It is already listed in `.gitignore` by the project scaffold. The `VITE_SUPABASE_PUBLISHABLE_KEY` is a public anon key — it is safe to expose in browser bundles, but Row-Level Security policies ensure it cannot access data without a valid user session.
+    </Warning>
   </Step>
+
+  <Step title="Run Database Migrations">
+    BeautySalon ships with SQL migration files in `supabase/migrations/` that create all tables (`appointments`, `services`, `staff`, `clients`, `staff_categories`) and apply the necessary RLS policies.
+
+    Apply them to your Supabase project using one of the following methods:
+
+    <Tabs>
+      <Tab title="Supabase CLI (recommended)">
+        If you have the [Supabase CLI](https://supabase.com/docs/guides/cli) installed and have linked your project:
+
+        ```bash
+        supabase db push
+        ```
+      </Tab>
+      <Tab title="SQL Editor (no CLI)">
+        1. Open your project in the [Supabase Dashboard](https://supabase.com/dashboard).
+        2. Navigate to **SQL Editor**.
+        3. Open each file from `supabase/migrations/` in order and run it.
+      </Tab>
+    </Tabs>
+
+    For a full walkthrough of the migration files and schema details, see the [Database Setup guide](/self-hosting/database).
+  </Step>
+
+  <Step title="Start the Development Server">
+    With dependencies installed and environment variables set, start the Vite dev server:
+
+    <CodeGroup>
+      ```bash npm
+      npm run dev
+      ```
+
+      ```bash bun
+      bun run dev
+      ```
+    </CodeGroup>
+
+    Vite will print output similar to:
+
+    ```
+    VITE v5.4.x  ready in 300ms
+
+    ➜  Local:   http://localhost:8080/
+    ➜  Network: use --host to expose
+    ```
+
+    The other available scripts are:
+
+    | Script | Description |
+    |---|---|
+    | `npm run build` | Production build output to `dist/` |
+    | `npm run build:dev` | Development-mode build |
+    | `npm run preview` | Serve the production build locally |
+    | `npm run lint` | Run ESLint across the project |
+    | `npm run test` | Run the Vitest test suite once |
+    | `npm run test:watch` | Run Vitest in watch mode |
+  </Step>
+
+  <Step title="Open the App and Sign Up">
+    Open [http://localhost:8080](http://localhost:8080) in your browser. You will see the BeautySalon login page.
+
+    To create your first admin account:
+
+    1. Click **¿No tienes cuenta? Regístrate** to switch to the sign-up form.
+    2. Enter a display name, email, and password (minimum 6 characters).
+    3. Click **Crear Cuenta**.
+    4. Check your email for the confirmation link sent by Supabase and click it.
+    5. Return to the login page, enter your credentials, and click **Ingresar**.
+
+    You will be redirected to `/admin` and land on the **Dashboard**.
+
+    <Info>
+      If you see a "Bienvenido!" toast but the dashboard shows zeros across all KPI cards, your migrations have not been applied yet or your Supabase environment variables are pointing to the wrong project. Double-check your `.env.local` values and re-run migrations.
+    </Info>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What's Next?
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Now that your local instance is running, explore the rest of the documentation:
+
+<CardGroup cols={2}>
+  <Card title="Dashboard" icon="chart-bar" href="/features/dashboard">
+    Understand the KPI cards and time-period filters on the main admin dashboard.
+  </Card>
+  <Card title="Appointments" icon="calendar" href="/features/appointments">
+    Learn how to book, update, and manage appointment statuses.
+  </Card>
+  <Card title="Services" icon="scissors" href="/features/services">
+    Browse and customize the 40+ pre-loaded services across 8 categories.
+  </Card>
+  <Card title="Self-Hosting Setup" icon="server" href="/self-hosting/setup">
+    Deploy BeautySalon to production with environment configuration and build steps.
+  </Card>
+</CardGroup>

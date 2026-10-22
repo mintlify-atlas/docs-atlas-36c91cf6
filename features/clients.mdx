@@ -1,0 +1,169 @@
+---
+title: "Client Records and History via NIT/Cédula Lookup"
+sidebarTitle: "Clients"
+description: "BeautySalon stores client contact details indexed by NIT or cédula. The appointment form auto-fills returning client data and upserts any changes on booking."
+---
+
+BeautySalon treats the **NIT or cédula** as the canonical identifier for every client. Rather than a standalone client management screen, client records live inside the Appointments module — they are created automatically the first time someone books, and updated on every subsequent booking if any contact details have changed. This design keeps your client database current with zero extra data-entry effort.
+
+## The `clients` Table
+
+Client records are stored in the `clients` table with the following schema:
+
+<ResponseField name="id" type="string (uuid)">
+  Auto-generated primary key. Not exposed in the UI — the operational key is `nit_cedula`.
+</ResponseField>
+<ResponseField name="nit_cedula" type="string" required>
+  The unique business identifier — a Colombian NIT (company tax ID) or cédula (national identity number). This column has a `UNIQUE` constraint and is the conflict target for all upsert operations.
+</ResponseField>
+<ResponseField name="name" type="string" required>
+  Full name or business/company name (*razón social*).
+</ResponseField>
+<ResponseField name="email" type="string | null">
+  Contact email address.
+</ResponseField>
+<ResponseField name="phone" type="string | null">
+  Contact phone number, including country code (e.g. `+573001234567`).
+</ResponseField>
+<ResponseField name="direccion" type="string | null">
+  Postal or street address.
+</ResponseField>
+<ResponseField name="created_at" type="string (timestamptz)">
+  Set once on first upsert. Never overwritten.
+</ResponseField>
+<ResponseField name="updated_at" type="string (timestamptz)">
+  Updated automatically on every subsequent upsert.
+</ResponseField>
+
+## Debounced NIT/Cédula Lookup
+
+When a receptionist starts typing a NIT or cédula into the booking form, BeautySalon fires a Supabase lookup **600 ms after the user stops typing**, but only once the field contains **4 or more characters**. This debounce window prevents unnecessary database round-trips for partial inputs.
+
+```typescript
+const handleNitChange = (value: string) => {
+  setFormData(prev => ({ ...prev, nit_cedula: value }));
+  setClientFound(false);
+  if (debounceRef.current) clearTimeout(debounceRef.current);
+  if (value.trim().length >= 4) {
+    debounceRef.current = setTimeout(() => lookupClient(value), 600);
+  }
+};
+```
+
+The `lookupClient` function performs the actual database query and auto-fills the form fields if a match is found:
+
+```typescript
+const lookupClient = useCallback(async (nit: string) => {
+  if (!nit.trim() || isDemo) { setClientFound(false); return; }
+  setLookingUp(true);
+  try {
+    const { data } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("nit_cedula", nit.trim())
+      .maybeSingle();
+    if (data) {
+      setFormData(prev => ({
+        ...prev,
+        client_name: data.name || "",
+        client_email: data.email || "",
+        client_phone: data.phone || "",
+        direccion: data.direccion || "",
+      }));
+      setClientFound(true);
+      toast.success("Cliente encontrado");
+    } else {
+      setClientFound(false);
+    }
+  } catch {
+    setClientFound(false);
+  } finally {
+    setLookingUp(false);
+  }
+}, [isDemo]);
+```
+
+<Note>
+  During lookup, a spinning `Loader2` icon appears inside the NIT field. Once a client is found, the spinner is replaced by a green `CheckCircle` icon and the input border turns emerald — giving the receptionist instant visual confirmation without reading any text.
+</Note>
+
+## The "Cliente existente" Indicator
+
+When `lookupClient` finds a match, the form switches into **returning client** mode:
+
+<Steps>
+  <Step title="Green border and checkmark">
+    The NIT input gains an emerald ring and a `CheckCircle` icon on the right side. These are applied by conditionally adding the class `border-emerald-500 ring-1 ring-emerald-500` to the input.
+  </Step>
+  <Step title="Auto-filled fields">
+    The **Name**, **Email**, **Phone**, and **Address** fields are all populated from the matching `clients` row. The receptionist can then review and edit any field before saving.
+  </Step>
+  <Step title="Confirmation label">
+    A small text label reading *Cliente existente — datos cargados* appears beneath the NIT field to confirm data was loaded.
+  </Step>
+  <Step title="Actualizar Cliente button">
+    A secondary **Actualizar Cliente** button appears at the bottom of the form. Clicking it immediately upserts the current form values back into the `clients` table — letting the receptionist correct an outdated phone number or address in real time, independently of creating a new appointment.
+  </Step>
+</Steps>
+
+## Client Upsert on Booking
+
+Every time an appointment is created, BeautySalon runs an upsert into `clients` **before** inserting the appointment row. This ensures the `clients` table always reflects the most recently provided contact details:
+
+```typescript
+// Upsert client before creating the appointment
+if (formData.nit_cedula.trim()) {
+  await supabase.from("clients").upsert(
+    {
+      nit_cedula: formData.nit_cedula.trim(),
+      name: formData.client_name,
+      email: formData.client_email || null,
+      phone: formData.client_phone || null,
+      direccion: formData.direccion || null,
+    },
+    { onConflict: "nit_cedula" }
+  );
+}
+```
+
+If a row with the same `nit_cedula` already exists, Supabase performs an `UPDATE` on that row (PostgreSQL `INSERT … ON CONFLICT DO UPDATE`). If no row exists, it performs an `INSERT`. Either way, the subsequent appointment row is then linked to the client via the shared `nit_cedula` value stored in `appointments.nit_cedula`.
+
+## Client History via Appointments
+
+There is no dedicated page that lists all appointments for a single client. However, because every appointment stores `nit_cedula` in its own row, a client's full service history can always be reconstructed by querying `appointments` where `nit_cedula` matches:
+
+```sql
+SELECT
+  appointment_date,
+  appointment_time,
+  status,
+  services.name  AS service,
+  staff.name     AS professional
+FROM appointments
+LEFT JOIN services ON appointments.service_id = services.id
+LEFT JOIN staff    ON appointments.staff_id    = staff.id
+WHERE appointments.nit_cedula = '12345678'
+ORDER BY appointment_date DESC, appointment_time DESC;
+```
+
+<Note>
+  There is no dedicated Clients CRUD screen in the current version of BeautySalon. All client data is created and maintained through the **Appointments** module. If you need to manually update a client record between bookings, open the appointment booking form, enter the client's NIT or cédula, and use the **Actualizar Cliente** button that appears after the lookup resolves.
+</Note>
+
+## Lookup Behaviour Reference
+
+<Accordion title="Lookup trigger conditions">
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Input length `< 4` chars | No lookup triggered; `clientFound` reset to `false` |
+| Input length `≥ 4` chars | Debounce timer (600 ms) starts; resets on each new keystroke |
+| Timer fires, client found | Fields auto-fill; green indicator shown; **Actualizar Cliente** button appears |
+| Timer fires, no match | Fields remain editable; no indicator shown; new client will be created on booking |
+| Demo mode active | `lookupClient` returns early without querying Supabase |
+
+</Accordion>
+
+<Tip>
+  Encourage receptionists to always enter the NIT or cédula first when taking a new booking. For returning clients this saves typing all four contact fields; for new clients it ensures a record is created on the first visit without any separate data-entry step.
+</Tip>

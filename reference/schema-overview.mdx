@@ -1,0 +1,235 @@
+---
+title: "Database Schema Overview: Tables, Relationships, and Enums"
+sidebarTitle: "Schema Overview"
+description: "BeautySalon's PostgreSQL schema has 7 tables managed by Supabase. This page maps the entity relationships between appointments, services, staff, and clients."
+---
+
+BeautySalon's database runs on PostgreSQL via Supabase and is organized into seven tables. Five of these tables form the core salon management domain — `staff_categories`, `staff`, `services`, `appointments`, and `clients` — while two tables (`categories` and `transactions`) belong to a legacy financial module that is present in the schema but not surfaced in the current salon management UI. Every table has Row Level Security (RLS) enabled, and all mutable tables carry an `updated_at` timestamp maintained automatically by a shared trigger function.
+
+## Tables at a Glance
+
+<CardGroup cols={2}>
+  <Card title="appointments" icon="calendar-check" href="/reference/appointments-table">
+    Stores every salon booking with client identity, service and staff foreign keys, date/time, and a four-state status field (`pending` → `confirmed` → `completed` / `cancelled`).
+  </Card>
+  <Card title="services" icon="scissors" href="/reference/services-table">
+    Defines the service catalog with price ranges in COP, duration windows in minutes, buffer times, gender targeting, and consultation flags.
+  </Card>
+  <Card title="staff" icon="user-tie" href="/reference/staff-table">
+    Holds team member records — name, contact details, a profile photo URL, and a foreign key into `staff_categories`.
+  </Card>
+  <Card title="staff_categories" icon="folder-open" href="/reference/staff-table">
+    Groups staff and services into specialties (e.g., *Cabello*, *Uñas*, *Masajes*). Documented alongside the `staff` table.
+  </Card>
+  <Card title="clients" icon="address-book" href="/reference/clients-table">
+    Returning-customer records indexed by NIT or cédula. Created or updated automatically during appointment booking via an upsert pattern.
+  </Card>
+  <Card title="profiles" icon="circle-user" href="/reference/schema-overview">
+    One row per authenticated user (`auth.users`), auto-created by the `on_auth_user_created` trigger. Stores an optional `display_name`.
+  </Card>
+  <Card title="categories" icon="tag" href="/reference/schema-overview">
+    Legacy financial module. Scoped per `user_id`; uses the `category_type` enum. Not used by salon management features.
+  </Card>
+  <Card title="transactions" icon="receipt" href="/reference/schema-overview">
+    Legacy financial module. Stores income/expense records scoped per `user_id`; uses the `transaction_type` enum. Not used by salon management features.
+  </Card>
+</CardGroup>
+
+<Note>
+  The `categories` and `transactions` tables originate from an earlier financial-tracking module. They remain in the schema but are not referenced by any of the salon management components (`AdminAppointments`, `AdminServices`, `AdminStaff`, `AdminDashboard`). Do not confuse `categories` with `staff_categories` — they are entirely separate tables.
+</Note>
+
+---
+
+## Entity-Relationship Summary
+
+The five core salon tables relate to one another as follows:
+
+```
+auth.users
+  └─▶ profiles          (profiles.user_id → auth.users.id, CASCADE DELETE)
+
+staff_categories
+  ├─▶ staff             (staff.category_id → staff_categories.id, SET NULL on delete)
+  └─▶ services          (services.category_id → staff_categories.id, SET NULL on delete)
+
+services
+  └─▶ appointments      (appointments.service_id → services.id, SET NULL on delete)
+
+staff
+  └─▶ appointments      (appointments.staff_id → staff.id, SET NULL on delete)
+
+clients                 (no FK from appointments; joined on nit_cedula by application logic)
+```
+
+**Narrative walk-through:**
+
+- A **staff_category** (e.g., "Cabello") acts as the central taxonomy node. Both `staff` members and `services` are tagged with a `category_id` that points to `staff_categories.id`. Deleting a category sets `category_id` to `NULL` in both tables rather than cascading a delete.
+- A **service** belongs to a `staff_category` and can be booked in an **appointment**. The `appointments.service_id` foreign key is nullable, so bookings can exist without a selected service.
+- A **staff** member belongs to a `staff_category` and is assigned to an **appointment** via `appointments.staff_id`, also nullable.
+- A **client** is a standalone record keyed by `nit_cedula` (Colombian tax/national ID). When a new appointment is created, the application upserts the client record first, then inserts the appointment. There is no database-level FK between `appointments` and `clients` — the join is performed in application code using the shared `nit_cedula` value.
+- A **profile** is the admin-facing user record, linked 1:1 to `auth.users`. It is auto-created by the `on_auth_user_created` trigger immediately after Supabase signup.
+
+---
+
+## Enums
+
+Two PostgreSQL enums are defined in the `public` schema. Both are used exclusively by the legacy financial tables.
+
+<Tabs>
+  <Tab title="category_type">
+    Classifies a financial category as either revenue-generating or cost-incurring.
+
+    ```sql
+    CREATE TYPE public.category_type AS ENUM ('income', 'expense');
+    ```
+
+    **Used by:** `categories.type`
+
+    | Value | Meaning |
+    |-------|---------|
+    | `income` | Revenue category (e.g., service income) |
+    | `expense` | Cost category (e.g., supplies, rent) |
+  </Tab>
+  <Tab title="transaction_type">
+    Classifies an individual financial transaction.
+
+    ```sql
+    CREATE TYPE public.transaction_type AS ENUM ('income', 'expense');
+    ```
+
+    **Used by:** `transactions.type`
+
+    | Value | Meaning |
+    |-------|---------|
+    | `income` | Money received |
+    | `expense` | Money spent |
+  </Tab>
+</Tabs>
+
+Both enums share identical members. Their TypeScript equivalents are exported from `src/integrations/supabase/types.ts`:
+
+```typescript
+export const Constants = {
+  public: {
+    Enums: {
+      category_type: ["income", "expense"],
+      transaction_type: ["income", "expense"],
+    },
+  },
+} as const;
+```
+
+---
+
+## The `update_updated_at_column()` Trigger Function
+
+Every mutable table uses a shared `BEFORE UPDATE` trigger to keep `updated_at` accurate without requiring the application layer to manage it.
+
+```sql
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+```
+
+The trigger is attached to each table individually:
+
+```sql
+-- Examples from migration files
+CREATE TRIGGER update_profiles_updated_at
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_staff_categories_updated_at
+  BEFORE UPDATE ON public.staff_categories
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_staff_updated_at
+  BEFORE UPDATE ON public.staff
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_services_updated_at
+  BEFORE UPDATE ON public.services
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_appointments_updated_at
+  BEFORE UPDATE ON public.appointments
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_clients_updated_at
+  BEFORE UPDATE ON public.clients
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_transactions_updated_at
+  BEFORE UPDATE ON public.transactions
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```
+
+<Tip>
+  Because `updated_at` is managed by this trigger, your application code never needs to pass `updated_at` in an `UPDATE` payload. Supabase JS will ignore it if you do, and the trigger will overwrite it anyway.
+</Tip>
+
+---
+
+## Auto-Create Profile on Signup
+
+In addition to `update_updated_at_column()`, the first migration defines a second trigger function that automatically inserts a `profiles` row whenever a new user signs up via Supabase Auth:
+
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (user_id, display_name)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1))
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+The `display_name` defaults to the portion of the email address before the `@` symbol if no explicit display name is provided during signup.
+
+---
+
+## RLS Policy Summary
+
+All seven tables have Row Level Security enabled. The table below summarises which operations are open to anonymous visitors versus authenticated users:
+
+| Table | Anon SELECT | Anon INSERT | Auth SELECT | Auth INSERT | Auth UPDATE | Auth DELETE |
+|-------|:-----------:|:-----------:|:-----------:|:-----------:|:-----------:|:-----------:|
+| `profiles` | ✗ (own only) | ✗ (own only) | ✓ (own) | ✓ (own) | ✓ (own) | — |
+| `staff_categories` | ✓ | — | ✓ | ✓ | ✓ | ✓ |
+| `staff` | ✓ | — | ✓ | ✓ | ✓ | ✓ |
+| `services` | ✓ | — | ✓ | ✓ | ✓ | ✓ |
+| `appointments` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `clients` | — | — | ✓ | ✓ | ✓ | ✓ |
+| `categories` | ✗ (own only) | ✗ (own only) | ✓ (own) | ✓ (own) | ✓ (own) | ✓ (own) |
+| `transactions` | ✗ (own only) | ✗ (own only) | ✓ (own) | ✓ (own) | ✓ (own) | ✓ (own) |
+
+<Info>
+  The `appointments` table intentionally allows anonymous INSERT so that the public booking form can submit appointments without requiring a login. Anonymous SELECT is also open, enabling the booking UI to read available services and staff availability. UPDATE and DELETE require authentication and are only performed by the admin dashboard.
+</Info>
+
+---
+
+## Migration File Index
+
+The schema was built across four migration files applied in order:
+
+| File | Description |
+|------|-------------|
+| `20260320234404_e9646c4f-...sql` | Creates `update_updated_at_column()`, `handle_new_user()`, `profiles`, `categories`, `transactions` plus both enums |
+| `20260411210137_1eb3dc8e-...sql` | Creates `staff_categories`, `staff`, `services` (original schema), `appointments` (original schema) plus triggers |
+| `20260411212420_6adfc7e4-...sql` | Extends `services` with `price_min`, `price_max`, `duration_min`, `duration_max`, `gender`, `requires_consultation`, `buffer_time`; migrates data; drops old `price` and `duration_minutes` columns |
+| `20260411220452_019a11d8-...sql` | Adds `nit_cedula` and `direccion` to `appointments`; makes `client_phone` nullable |
+| `20260411221558_9f3281bd-...sql` | Creates `clients` table with RLS policies and `updated_at` trigger |

@@ -1,0 +1,322 @@
+---
+title: "Row-Level Security Policies for Every BeautySalon Table"
+sidebarTitle: "Supabase RLS"
+description: "BeautySalon enables RLS on all tables. Salon data (staff, services, appointments) is accessible by any authenticated user. Profile and financial data is owner-scoped."
+---
+
+Row-Level Security (RLS) is a PostgreSQL feature that Supabase exposes natively. When RLS is enabled on a table, every query — whether it originates from the client SDK, a serverless function, or the Supabase dashboard's SQL editor — is filtered through a set of policies before any rows are read or written. BeautySalon activates RLS on **every** table it creates, which means the Supabase `anon` key can be safely shipped in client-side JavaScript without exposing data that doesn't belong to the requesting user.
+
+<Warning>
+  The `anon` (public) key is safe to use in client-side code **only because RLS is enabled**. If you ever disable RLS on a table — even temporarily — any request that uses the `anon` key can read or mutate every row in that table. Never disable RLS in production.
+</Warning>
+
+<Note>
+  Supabase attaches one of two roles to every incoming request: **`anon`** for unauthenticated visitors and **`authenticated`** for users who have completed a sign-in flow and hold a valid JWT. Policies can target one role, both, or neither (using a bare `USING (true)` clause that applies to all callers). BeautySalon uses this distinction to let the public booking widget insert appointments while keeping admin mutations behind the `authenticated` gate.
+</Note>
+
+---
+
+## How to Verify RLS Is Enabled
+
+You can confirm RLS status for any table directly in the Supabase dashboard without writing SQL.
+
+<Steps>
+  <Step title="Open the Table Editor">
+    Log in to [supabase.com](https://supabase.com), select your BeautySalon project, and click **Table Editor** in the left sidebar.
+  </Step>
+  <Step title="Select a table">
+    Click on any table — for example, `staff` or `appointments`.
+  </Step>
+  <Step title="Check the RLS badge">
+    Look for the **RLS enabled** badge in the top-right area of the table view. If it shows **RLS disabled**, click the toggle to enable it, then re-apply the policies below.
+  </Step>
+  <Step title="Inspect individual policies">
+    Navigate to **Authentication → Policies** in the sidebar to see, edit, or add policies for every table in one place.
+  </Step>
+</Steps>
+
+---
+
+## Policy Reference by Table
+
+The sections below list every RLS policy as it appears in the migration SQL. The policies are grouped by table and ordered from most restrictive (owner-scoped) to most permissive (public read).
+
+### `profiles`
+
+The `profiles` table stores per-user display names and is strictly owner-scoped — a user can only see and modify their own row. There is no DELETE policy; rows are removed automatically via the `ON DELETE CASCADE` on the `auth.users` foreign key.
+
+```sql
+-- Migration: 20260320234404
+CREATE POLICY "Users can view own profile"
+  ON public.profiles
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own profile"
+  ON public.profiles
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own profile"
+  ON public.profiles
+  FOR UPDATE
+  USING (auth.uid() = user_id);
+```
+
+---
+
+### `categories`
+
+The `categories` table holds the **financial transaction categories** (income / expense types) that belong to a specific salon owner. All four operations are owner-scoped.
+
+```sql
+-- Migration: 20260320234404
+CREATE POLICY "Users can view own categories"
+  ON public.categories
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own categories"
+  ON public.categories
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own categories"
+  ON public.categories
+  FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own categories"
+  ON public.categories
+  FOR DELETE
+  USING (auth.uid() = user_id);
+```
+
+---
+
+### `transactions`
+
+Income and expense records are among the most sensitive data in the application. Like `categories`, every operation requires the requester's UID to match the `user_id` column.
+
+```sql
+-- Migration: 20260320234404
+CREATE POLICY "Users can view own transactions"
+  ON public.transactions
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own transactions"
+  ON public.transactions
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own transactions"
+  ON public.transactions
+  FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own transactions"
+  ON public.transactions
+  FOR DELETE
+  USING (auth.uid() = user_id);
+```
+
+---
+
+### `staff_categories`
+
+Service and staff categories are shared salon-wide configuration. Any visitor can read the list (for example, to populate a booking widget's filter), but only signed-in users can create, change, or remove categories.
+
+```sql
+-- Migration: 20260411210137
+CREATE POLICY "Anyone can view staff categories"
+  ON public.staff_categories
+  FOR SELECT
+  USING (true);
+
+CREATE POLICY "Authenticated users can insert staff categories"
+  ON public.staff_categories
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update staff categories"
+  ON public.staff_categories
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can delete staff categories"
+  ON public.staff_categories
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+---
+
+### `staff`
+
+Staff records follow the same public-read / authenticated-write pattern as categories. All active and inactive staff rows are readable without authentication, supporting public-facing team pages or booking dropdowns.
+
+```sql
+-- Migration: 20260411210137
+CREATE POLICY "Anyone can view active staff"
+  ON public.staff
+  FOR SELECT
+  USING (true);
+
+CREATE POLICY "Authenticated users can insert staff"
+  ON public.staff
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update staff"
+  ON public.staff
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can delete staff"
+  ON public.staff
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+---
+
+### `services`
+
+Service records (names, prices, durations, categories) are publicly readable, allowing unauthenticated booking flows to display the full service menu. Mutations require authentication.
+
+```sql
+-- Migration: 20260411210137
+CREATE POLICY "Anyone can view active services"
+  ON public.services
+  FOR SELECT
+  USING (true);
+
+CREATE POLICY "Authenticated users can insert services"
+  ON public.services
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update services"
+  ON public.services
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can delete services"
+  ON public.services
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+---
+
+### `appointments`
+
+Appointments have the **most permissive INSERT policy** in the entire schema. Both the `anon` and `authenticated` roles can create appointments, which enables a public booking form where walk-in clients do not need an account. Reading is also public, and admin mutations (update / delete) are restricted to authenticated users.
+
+```sql
+-- Migration: 20260411210137
+CREATE POLICY "Anyone can create appointments"
+  ON public.appointments
+  FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Anyone can view appointments"
+  ON public.appointments
+  FOR SELECT
+  USING (true);
+
+CREATE POLICY "Authenticated users can update appointments"
+  ON public.appointments
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can delete appointments"
+  ON public.appointments
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+---
+
+### `clients`
+
+The `clients` table, added in a later migration, stores re-usable client records keyed by `nit_cedula` (tax ID / national ID). Unlike appointments, even SELECT requires authentication, making this a staff-only data store.
+
+```sql
+-- Migration: 20260411221558
+CREATE POLICY "Anyone can view clients"
+  ON public.clients
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can insert clients"
+  ON public.clients
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update clients"
+  ON public.clients
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Authenticated users can delete clients"
+  ON public.clients
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+---
+
+## Policy Summary
+
+<CardGroup cols={2}>
+  <Card title="Owner-Scoped Tables" icon="lock">
+    **`profiles`**, **`categories`**, and **`transactions`** use `auth.uid() = user_id` on every operation. Only the row owner can read or write their data.
+  </Card>
+  <Card title="Public-Read / Auth-Write Tables" icon="eye">
+    **`staff_categories`**, **`staff`**, and **`services`** are readable by anyone but writable only by authenticated users, enabling public booking UIs.
+  </Card>
+  <Card title="Mixed-Anon Inserts" icon="calendar">
+    **`appointments`** allows both `anon` and `authenticated` roles to INSERT, supporting walk-in bookings without account creation. SELECTs are also open; mutations are auth-gated.
+  </Card>
+  <Card title="Auth-Only Table" icon="users">
+    **`clients`** restricts even SELECT to authenticated users, keeping client PII (tax IDs, addresses) invisible to unauthenticated requests.
+  </Card>
+</CardGroup>
+
+---
+
+## Frequently Asked Questions
+
+<Accordion title="Do I need to change anything when deploying my own instance?">
+  No. All policies are applied by the migration files in `supabase/migrations/`. Running `supabase db push` or `supabase db reset` will replay every migration and re-create all policies in the correct order.
+</Accordion>
+
+<Accordion title="Can two different authenticated users see each other's appointments?">
+  Yes — the `appointments` SELECT policy uses `USING (true)`, meaning all authenticated (and anonymous) users can read all appointment rows. This is intentional: the admin dashboard needs to display every appointment regardless of who created it. If you require per-user appointment isolation, replace the policy with `USING (auth.uid() = created_by)` and add a `created_by` column.
+</Accordion>
+
+<Accordion title="What happens if a policy is accidentally dropped?">
+  If a policy is dropped and RLS remains enabled, PostgreSQL's default is **deny all**. No rows will be returned for that operation until the policy is re-created. Re-apply the relevant SQL block above via the Supabase SQL editor or by running a new migration.
+</Accordion>
+
+<Accordion title="How do service-role (admin) keys interact with RLS?">
+  Supabase's `service_role` key bypasses RLS entirely. Never expose this key in browser code. Use it only in secure server-side environments such as Edge Functions, CI pipelines, or migration scripts.
+</Accordion>

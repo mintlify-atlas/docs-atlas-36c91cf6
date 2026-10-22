@@ -1,0 +1,143 @@
+---
+title: "Admin Dashboard: Real-Time Salon KPIs and Statistics"
+sidebarTitle: "Dashboard"
+description: "The BeautySalon dashboard shows real-time KPI cards — appointments, revenue, active staff, and services — filterable by day, week, or month."
+---
+
+The Admin Dashboard is the first screen you see after logging in. It surfaces six KPI cards drawn live from Supabase, giving you an at-a-glance overview of your salon's activity for the selected time window. Every card auto-refreshes whenever you switch the period filter, and all monetary values are formatted in Colombian Peso (COP) using the `es-CO` locale.
+
+## Period Filters
+
+Three period buttons appear just below the page title. Clicking any one of them re-runs the underlying Supabase queries and re-renders all six KPI cards immediately.
+
+<CardGroup cols={3}>
+  <Card title="Hoy" icon="sun">
+    Scopes every query to today's date only (`from === to`). Useful for the morning stand-up or end-of-day reconciliation.
+  </Card>
+  <Card title="7 Días" icon="calendar-days">
+    Covers the last seven calendar days (today minus 6 days through today). Ideal for a rolling weekly snapshot.
+  </Card>
+  <Card title="Mes" icon="calendar">
+    Runs from the first day of the current month through today. Use this for monthly revenue targets and staffing reviews.
+  </Card>
+</CardGroup>
+
+### `getDateRange` Helper
+
+The date range passed to every Supabase query is produced by this pure function, which lives directly in `AdminDashboard.tsx`:
+
+```typescript
+function getDateRange(period: string) {
+  const today = new Date();
+  const todayStr = today.toISOString().split("T")[0];
+
+  if (period === "day") return { from: todayStr, to: todayStr };
+
+  if (period === "week") {
+    const weekAgo = new Date(today);
+    weekAgo.setDate(today.getDate() - 6);
+    return { from: weekAgo.toISOString().split("T")[0], to: todayStr };
+  }
+
+  // Default: current month
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  return { from: monthStart.toISOString().split("T")[0], to: todayStr };
+}
+```
+
+When `from === to` the query uses `.eq("appointment_date", from)`; otherwise it uses `.gte("appointment_date", from).lte("appointment_date", to)`.
+
+---
+
+## KPI Cards
+
+The dashboard renders six cards in a responsive grid (2 columns on small screens, 3 on medium, 4 on large). Each card label changes dynamically based on the active period.
+
+<CardGroup cols={2}>
+  <Card title="Citas Hoy / 7 días / Mes" icon="calendar-days">
+    **Source:** `COUNT(*)` on the `appointments` table, filtered by the active date range. The label switches between _"Citas Hoy"_, _"Citas (7 días)"_, and _"Citas del Mes"_ via the `periodLabels` map.
+  </Card>
+  <Card title="Programadas" icon="clock">
+    **Source:** Same date-range filter on `appointments` with an additional `.eq("status", "pending")`. Reflects bookings not yet confirmed or acted on.
+  </Card>
+  <Card title="Personal Activo" icon="users">
+    **Source:** `COUNT(*)` on the `staff` table with `.eq("is_active", true)`. This count is **not** date-filtered — it always reflects the current total of active staff members.
+  </Card>
+  <Card title="Servicios" icon="scissors">
+    **Source:** `COUNT(*)` on the `services` table with `.eq("is_active", true)`. Like staff, this is a global count unaffected by the period filter.
+  </Card>
+  <Card title="Ingresos del Día / 7 días / Mes" icon="dollar-sign">
+    **Source:** Joins `appointments` → `services(price_min)` filtering by `status = 'completed'` within the date range. Revenue is summed client-side: `completed.reduce((sum, a) => sum + Number(a.services?.price_min || 0), 0)`. The result is formatted as COP with zero decimal places.
+  </Card>
+  <Card title="Canceladas" icon="circle-x">
+    **Source:** Same date-range filter on `appointments` with `.eq("status", "cancelled")`. Displayed in the destructive (red) accent color to draw attention to cancellation rates.
+  </Card>
+</CardGroup>
+
+### Revenue Calculation Detail
+
+Revenue is derived from the **minimum price** (`price_min`) of the linked service for every appointment whose `status` equals `"completed"`. This means the displayed figure is a conservative floor of actual revenue, not a precise invoiced amount.
+
+```typescript
+// From AdminDashboard.tsx — the completed query join
+supabase
+  .from("appointments")
+  .select("services(price_min)")
+  .eq("status", "completed")
+
+// Client-side aggregation
+const revenue = (completed || []).reduce(
+  (sum, a) => sum + Number((a.services as any)?.price_min || 0),
+  0
+);
+```
+
+---
+
+## Demo Stats Fallback
+
+When the session is running in demo mode (`isDemo === true`), the `queryFn` short-circuits and returns the following hardcoded object instead of hitting Supabase. This allows unauthenticated visitors to explore the dashboard at [beautysalonsaas.netlify.app](https://beautysalonsaas.netlify.app) without needing real data.
+
+```typescript
+const DEMO_STATS = {
+  totalAppointments: 5,
+  totalStaff: 8,
+  totalServices: 12,
+  revenue: 385000,
+  pendingAppointments: 3,
+  cancelledAppointments: 1,
+  inProgressAppointments: 1,
+};
+```
+
+<Note>
+  When `isDemo` is `true`, a golden **DEMO** badge appears in the top-right corner of the dashboard header. This badge is rendered inline via `{isDemo && <span ...>DEMO</span>}` and serves as a persistent reminder that data is synthetic and write operations are disabled across the entire admin panel.
+</Note>
+
+---
+
+## All Six Queries in One Shot
+
+The live (non-demo) path fires all seven Supabase requests in parallel with `Promise.all`, keeping total round-trip time close to a single network hop:
+
+```typescript
+const [
+  { count: totalCount },        // total appointments in range
+  { count: staffCount },        // active staff (global)
+  { count: servicesCount },     // active services (global)
+  { data: completed },          // completed appointments with price_min
+  { count: pendingCount },      // pending appointments in range
+  { count: cancelledCount },    // cancelled appointments in range
+  { count: inProgressCount },   // confirmed appointments in range
+] = await Promise.all([
+  dateFilter(supabase.from("appointments").select("*", { count: "exact", head: true })),
+  supabase.from("staff").select("*", { count: "exact", head: true }).eq("is_active", true),
+  supabase.from("services").select("*", { count: "exact", head: true }).eq("is_active", true),
+  dateFilter(supabase.from("appointments").select("services(price_min)").eq("status", "completed")),
+  dateFilter(supabase.from("appointments").select("*", { count: "exact", head: true }).eq("status", "pending")),
+  dateFilter(supabase.from("appointments").select("*", { count: "exact", head: true }).eq("status", "cancelled")),
+  dateFilter(supabase.from("appointments").select("*", { count: "exact", head: true }).eq("status", "confirmed")),
+]);
+```
+
+The query is cached under the key `["admin-stats", period]` by React Query, so switching back to a previously-seen period renders instantly from cache until the next invalidation.

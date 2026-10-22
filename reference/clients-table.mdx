@@ -1,0 +1,323 @@
+---
+title: "clients Table: Schema, Upsert Pattern, and History Queries"
+sidebarTitle: "clients"
+description: "The clients table stores returning customer records indexed by NIT or cédula. Records are created or updated automatically when appointments are booked via the upsert pattern."
+---
+
+The `clients` table was introduced in migration `20260411221558` as a persistent directory of returning salon customers. Unlike `appointments`, which stores client information inline for each booking, `clients` maintains a single canonical record per person identified by their Colombian tax or national identity number (`nit_cedula`). This design supports a lookup-as-you-type UX in the booking form: when a receptionist types a client's ID, the form auto-fills the name, email, phone, and address from the existing record. If the client is new, their record is created the moment the appointment is saved. Every `clients` write operation requires authentication, making this a staff-only table.
+
+---
+
+## TypeScript Row Type
+
+```typescript
+type ClientRow = {
+  id: string           // uuid
+  nit_cedula: string   // unique, required
+  name: string
+  email: string | null
+  phone: string | null
+  direccion: string | null
+  created_at: string   // timestamptz
+  updated_at: string   // timestamptz
+}
+```
+
+---
+
+## Column Reference
+
+<ResponseField name="id" type="uuid" required>
+  Primary key. Generated server-side with `gen_random_uuid()`. Not referenced as a foreign key by any other table — the `appointments` table links to clients by matching `nit_cedula` values, not by `id`.
+</ResponseField>
+
+<ResponseField name="nit_cedula" type="text" required>
+  Colombian NIT (Número de Identificación Tributaria) for business clients or Cédula (national identity document number) for individual clients. Has a `UNIQUE` constraint — this is the conflict key used in upsert operations. Maximum length is unrestricted at the database level.
+</ResponseField>
+
+<ResponseField name="name" type="text" required>
+  Full name or business name (*razón social*) of the client. Mirrored into `appointments.client_name` at booking time.
+</ResponseField>
+
+<ResponseField name="email" type="text">
+  Client email address. Nullable. No uniqueness constraint — the same email may belong to multiple NIT/cédula records (e.g., a business with multiple registrations).
+</ResponseField>
+
+<ResponseField name="phone" type="text">
+  Client phone number. Nullable. Mirrored into `appointments.client_phone` at booking time.
+</ResponseField>
+
+<ResponseField name="direccion" type="text">
+  Client's physical address. Nullable. Mirrored into `appointments.direccion` at booking time.
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamptz" required>
+  Row creation timestamp. Set automatically to `now()` on the first upsert. On a subsequent upsert of an existing row this column is not modified.
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamptz" required>
+  Updated automatically by the `update_clients_updated_at` trigger on every `UPDATE`. The upsert pattern will touch this column whenever an existing client's data changes.
+</ResponseField>
+
+---
+
+## The Upsert Pattern
+
+The core insight behind the `clients` table is that client records are managed implicitly through the appointment booking flow. The receptionist never navigates to a dedicated "Clients" form — instead, the `AdminAppointments` component runs an upsert every time a new appointment is saved:
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+// Called inside handleCreate() in AdminAppointments.tsx
+if (formData.nit_cedula.trim()) {
+  await supabase.from("clients").upsert(
+    {
+      nit_cedula: formData.nit_cedula.trim(),
+      name: formData.client_name,
+      email: formData.client_email || null,
+      phone: formData.client_phone || null,
+      direccion: formData.direccion || null,
+    },
+    { onConflict: "nit_cedula" }
+  );
+}
+```
+
+**How it works:**
+
+- If no row with that `nit_cedula` exists → Supabase inserts a new `clients` row.
+- If a row already exists → Supabase updates the `name`, `email`, `phone`, and `direccion` columns with the values from the form, effectively keeping the client record in sync with the latest appointment data.
+- The `updated_at` trigger fires on every update, so `updated_at` always reflects the last time the client's data was touched.
+
+<Tip>
+  The receptionist can also manually update an existing client record without creating a new appointment by clicking **Actualizar Cliente** in the booking form. This triggers a standalone upsert using the same pattern, without calling `appointments.insert`.
+</Tip>
+
+---
+
+## Lookup-as-You-Type
+
+When the booking form's NIT/Cédula field reaches four or more characters, the component debounces a query against `clients` and pre-fills the other fields:
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+// Fired after a 600ms debounce from handleNitChange()
+const { data } = await supabase
+  .from("clients")
+  .select("*")
+  .eq("nit_cedula", nit.trim())
+  .maybeSingle();
+
+if (data) {
+  // Pre-fill the form fields with existing client data
+  setFormData(prev => ({
+    ...prev,
+    client_name: data.name ?? "",
+    client_email: data.email ?? "",
+    client_phone: data.phone ?? "",
+    direccion: data.direccion ?? "",
+  }));
+}
+```
+
+This pattern avoids duplicate data entry for returning clients and ensures the `clients` table stays up-to-date with the most recently used contact information.
+
+---
+
+## Appointment History by NIT/Cédula
+
+Because there is no database-level FK between `appointments` and `clients`, the join is performed in application code using the shared `nit_cedula` value. To load the full appointment history for a client:
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+// Step 1 — look up the client record
+const { data: client } = await supabase
+  .from("clients")
+  .select("*")
+  .eq("nit_cedula", "12345678")
+  .single();
+
+// Step 2 — fetch all their appointments
+const { data: history } = await supabase
+  .from("appointments")
+  .select("*, services(name, price_min, price_max), staff(name)")
+  .eq("nit_cedula", client.nit_cedula)
+  .order("appointment_date", { ascending: false })
+  .order("appointment_time", { ascending: false });
+```
+
+Alternatively, combine both into a single query if you already know the `nit_cedula`:
+
+```typescript
+import { supabase } from "@/integrations/supabase/client";
+
+const { data: appointments } = await supabase
+  .from("appointments")
+  .select(`
+    id,
+    appointment_date,
+    appointment_time,
+    status,
+    notes,
+    services(name, price_min, price_max),
+    staff(name)
+  `)
+  .eq("nit_cedula", "12345678")
+  .order("appointment_date", { ascending: false });
+```
+
+---
+
+## RLS Policies
+
+All operations on `clients` require an authenticated session. The booking flow in `AdminAppointments` always runs as an authenticated admin user, so the upsert succeeds. Anonymous visitors — who can create appointments directly — cannot read or write `clients` records.
+
+```sql
+-- Only authenticated users can read client records
+CREATE POLICY "Anyone can view clients"
+  ON public.clients
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+-- Only authenticated users can create client records
+CREATE POLICY "Authenticated users can insert clients"
+  ON public.clients
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (true);
+
+-- Only authenticated users can update client records
+CREATE POLICY "Authenticated users can update clients"
+  ON public.clients
+  FOR UPDATE
+  TO authenticated
+  USING (true);
+
+-- Only authenticated users can delete client records
+CREATE POLICY "Authenticated users can delete clients"
+  ON public.clients
+  FOR DELETE
+  TO authenticated
+  USING (true);
+```
+
+<Note>
+  Despite the policy being named "Anyone can view clients", the `TO authenticated` role qualifier restricts reads to authenticated sessions only. The policy name is misleading — anonymous callers cannot read this table.
+</Note>
+
+---
+
+## Example Queries
+
+<Tabs>
+  <Tab title="Upsert Client">
+    The canonical pattern used in `AdminAppointments.tsx` when creating or updating an appointment:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { error } = await supabase.from("clients").upsert(
+      {
+        nit_cedula: "900123456",
+        name: "Estética Bella S.A.S.",
+        email: "contacto@bella.co",
+        phone: "+5716789012",
+        direccion: "Calle 72 #10-34, Bogotá",
+      },
+      { onConflict: "nit_cedula" }
+    );
+
+    if (error) console.error("Upsert failed:", error.message);
+    ```
+  </Tab>
+  <Tab title="Look Up by NIT/Cédula">
+    Used by the debounced lookup in the booking form:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("nit_cedula", "900123456")
+      .maybeSingle(); // returns null instead of error if not found
+    ```
+  </Tab>
+  <Tab title="List All Clients">
+    Admin client directory, ordered by most recently updated:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data: clients, error } = await supabase
+      .from("clients")
+      .select("id, nit_cedula, name, email, phone, direccion, updated_at")
+      .order("updated_at", { ascending: false });
+    ```
+  </Tab>
+  <Tab title="Client Appointment History">
+    Full history for a returning client, joining service and staff names:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const nitCedula = "12345678";
+
+    const { data: history, error } = await supabase
+      .from("appointments")
+      .select(`
+        id,
+        appointment_date,
+        appointment_time,
+        status,
+        notes,
+        services(name, price_min, price_max),
+        staff(name)
+      `)
+      .eq("nit_cedula", nitCedula)
+      .order("appointment_date", { ascending: false });
+    ```
+  </Tab>
+  <Tab title="Delete a Client">
+    Hard-delete a client record (does not affect existing appointments due to no FK constraint):
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { error } = await supabase
+      .from("clients")
+      .delete()
+      .eq("nit_cedula", "12345678");
+    ```
+
+    <Warning>
+      Deleting a `clients` row does not affect any `appointments` rows — there is no FK constraint enforcing referential integrity between these tables. The `appointments` rows retain their inline `nit_cedula` value even after the `clients` record is gone.
+    </Warning>
+  </Tab>
+</Tabs>
+
+---
+
+## SQL Definition
+
+```sql
+CREATE TABLE public.clients (
+  id          UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  nit_cedula  TEXT NOT NULL UNIQUE,
+  name        TEXT NOT NULL,
+  email       TEXT,
+  phone       TEXT,
+  direccion   TEXT,
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_clients_updated_at
+  BEFORE UPDATE ON public.clients
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```

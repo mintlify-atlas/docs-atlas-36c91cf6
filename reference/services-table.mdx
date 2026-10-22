@@ -1,0 +1,304 @@
+---
+title: "services Table: Catalog Schema and Price/Duration Fields"
+sidebarTitle: "services"
+description: "The services table defines the salon's service catalog with price ranges in COP, duration windows in minutes, buffer times, and category and consultation flags."
+---
+
+The `services` table is the authoritative catalog of every treatment offered by the salon. It was introduced in migration `20260411210137` with a single `price` column and a `duration_minutes` column, then extended in `20260411212420` to support price ranges (`price_min` / `price_max`) and duration windows (`duration_min` / `duration_max`). Those original columns were dropped and existing data was migrated into the new range columns. The table also gained `gender`, `requires_consultation`, and `buffer_time` in the same migration, giving the catalog the flexibility needed for a full unisex salon offering.
+
+---
+
+## TypeScript Row Type
+
+```typescript
+type ServiceRow = {
+  id: string                    // uuid
+  name: string
+  description: string | null
+  price_min: number             // numeric, COP
+  price_max: number             // numeric, COP
+  duration_min: number          // integer, minutes
+  duration_max: number          // integer, minutes
+  buffer_time: number           // integer, minutes (default 0)
+  category_id: string | null    // uuid → staff_categories.id
+  gender: string                // default 'all'
+  is_active: boolean            // default true
+  requires_consultation: boolean // default false
+  created_at: string            // timestamptz
+  updated_at: string            // timestamptz
+}
+```
+
+---
+
+## Column Reference
+
+<ResponseField name="id" type="uuid" required>
+  Primary key. Generated server-side with `gen_random_uuid()`. Do not pass this on INSERT.
+</ResponseField>
+
+<ResponseField name="name" type="text" required>
+  Display name of the service (e.g., `"Corte de cabello"`, `"Manicure clásica"`). Shown in the booking form's service selector and in the appointment list.
+</ResponseField>
+
+<ResponseField name="description" type="text">
+  Optional longer description of the service. Not currently rendered in the admin UI but available for public-facing booking pages.
+</ResponseField>
+
+<ResponseField name="price_min" type="numeric" required>
+  Minimum price for this service in Colombian Pesos (COP). Defaults to `0`. Use the range `price_min` – `price_max` to communicate price variability to clients (e.g., a haircut priced at 25 000–45 000 COP depending on length).
+</ResponseField>
+
+<ResponseField name="price_max" type="numeric" required>
+  Maximum price for this service in COP. Defaults to `0`. When `price_min === price_max`, the service has a fixed price.
+</ResponseField>
+
+<ResponseField name="duration_min" type="integer" required>
+  Shortest expected duration in minutes. Defaults to `30`. Used to communicate the time commitment to clients.
+</ResponseField>
+
+<ResponseField name="duration_max" type="integer" required>
+  Longest expected duration in minutes. Defaults to `30`. When `duration_min === duration_max`, the service has a fixed duration.
+</ResponseField>
+
+<ResponseField name="buffer_time" type="integer" required>
+  Extra minutes reserved after the service ends before the next appointment can be scheduled for the same staff member. Defaults to `0`. Useful for cleanup or preparation time.
+</ResponseField>
+
+<ResponseField name="category_id" type="uuid">
+  Foreign key → `staff_categories.id`. Nullable. Associates the service with a specialty (e.g., *Cabello*, *Uñas*). The booking form filters services by this column when a category is selected. Set to `NULL` via `ON DELETE SET NULL` if the category is deleted.
+</ResponseField>
+
+<ResponseField name="gender" type="text" required>
+  Intended audience for the service. Defaults to `'all'`. Common values are `'all'`, `'female'`, and `'male'`. No database-level enum constraint — enforced by application logic.
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean" required>
+  Controls visibility in the booking form and admin service list. Defaults to `true`. Set to `false` to soft-delete a service without removing its historical association with appointments.
+</ResponseField>
+
+<ResponseField name="requires_consultation" type="boolean" required>
+  Flags services that need a prior consultation before booking (e.g., chemical treatments). Defaults to `false`. The booking UI can use this to add a consultation notice or to disable direct booking.
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamptz" required>
+  Row creation timestamp. Defaults to `now()`. Set automatically by Supabase.
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamptz" required>
+  Automatically updated by the `update_services_updated_at` trigger on every `UPDATE`. Do not set manually.
+</ResponseField>
+
+---
+
+## Foreign Key Relationships
+
+```sql
+-- services → staff_categories
+CONSTRAINT services_category_id_fkey
+  FOREIGN KEY (category_id) REFERENCES public.staff_categories(id)
+  ON DELETE SET NULL
+```
+
+Deleting a `staff_categories` row sets `services.category_id` to `NULL` rather than deleting the service. The `appointments` table references `services.id`:
+
+```sql
+-- appointments → services (defined on the appointments table)
+CONSTRAINT appointments_service_id_fkey
+  FOREIGN KEY (service_id) REFERENCES public.services(id)
+  ON DELETE SET NULL
+```
+
+---
+
+## RLS Policies
+
+```sql
+-- Any visitor (anon or authenticated) can read services
+CREATE POLICY "Anyone can view active services"
+  ON public.services
+  FOR SELECT
+  USING (true);
+
+-- Only authenticated admin users can manage the catalog
+CREATE POLICY "Authenticated users can insert services"
+  ON public.services FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update services"
+  ON public.services FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Authenticated users can delete services"
+  ON public.services FOR DELETE TO authenticated USING (true);
+```
+
+<Note>
+  The SELECT policy named "Anyone can view active services" applies `USING (true)` — it does not actually filter by `is_active`. The name is aspirational. If you want to restrict anonymous reads to active services only, update the policy: `USING (is_active = true)`. Authenticated admin users who need to manage inactive services should use a separate SELECT policy scoped to the `authenticated` role.
+</Note>
+
+---
+
+## Example Queries
+
+<Tabs>
+  <Tab title="List Active Services by Category">
+    The booking form loads active services filtered by a selected `staff_category`:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    // All active services (no category filter)
+    const { data: allServices } = await supabase
+      .from("services")
+      .select("id, name, category_id")
+      .eq("is_active", true)
+      .order("name");
+
+    // Active services for a specific category
+    const { data: categoryServices } = await supabase
+      .from("services")
+      .select("id, name, price_min, price_max, duration_min, duration_max, buffer_time")
+      .eq("is_active", true)
+      .eq("category_id", selectedCategoryId)
+      .order("name");
+    ```
+  </Tab>
+  <Tab title="Create a Service">
+    Admin creates a new service via `AdminServices`:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase.from("services").insert({
+      name: "Corte de cabello",
+      description: "Corte clásico con lavado incluido",
+      price_min: 25000,
+      price_max: 45000,
+      duration_min: 30,
+      duration_max: 60,
+      buffer_time: 10,
+      category_id: "uuid-of-cabello-category",
+      gender: "all",
+      is_active: true,
+      requires_consultation: false,
+    });
+
+    if (error) console.error(error.message);
+    ```
+  </Tab>
+  <Tab title="Soft-Delete (Deactivate)">
+    Rather than deleting a service and breaking historical appointments, set `is_active = false`:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { error } = await supabase
+      .from("services")
+      .update({ is_active: false })
+      .eq("id", serviceId);
+    ```
+  </Tab>
+  <Tab title="Full Catalog with Category Name">
+    Admin service list joins the category name in a single query:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase
+      .from("services")
+      .select(`
+        id,
+        name,
+        description,
+        price_min,
+        price_max,
+        duration_min,
+        duration_max,
+        buffer_time,
+        gender,
+        is_active,
+        requires_consultation,
+        staff_categories(id, name, icon)
+      `)
+      .order("name");
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Schema Migration History
+
+<Accordion title="Original schema (migration 20260411210137)">
+  The `services` table was first created with a single price and duration column:
+
+  ```sql
+  CREATE TABLE public.services (
+    id               UUID    NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    description      TEXT,
+    price            NUMERIC NOT NULL DEFAULT 0,
+    duration_minutes INTEGER NOT NULL DEFAULT 30,
+    category_id      UUID    REFERENCES public.staff_categories(id) ON DELETE SET NULL,
+    is_active        BOOLEAN NOT NULL DEFAULT true,
+    created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+  );
+  ```
+</Accordion>
+
+<Accordion title="Extended schema (migration 20260411212420)">
+  New range and metadata columns were added, existing data was migrated, and the original columns were dropped:
+
+  ```sql
+  ALTER TABLE public.services
+    ADD COLUMN IF NOT EXISTS price_min            numeric  NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS price_max            numeric  NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS duration_min         integer  NOT NULL DEFAULT 30,
+    ADD COLUMN IF NOT EXISTS duration_max         integer  NOT NULL DEFAULT 30,
+    ADD COLUMN IF NOT EXISTS gender               text     NOT NULL DEFAULT 'all',
+    ADD COLUMN IF NOT EXISTS requires_consultation boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS buffer_time          integer  NOT NULL DEFAULT 0;
+
+  -- Migrate existing rows so no data is lost
+  UPDATE public.services
+  SET
+    price_min     = price,
+    price_max     = price,
+    duration_min  = duration_minutes,
+    duration_max  = duration_minutes
+  WHERE price_min = 0;
+
+  -- Remove legacy columns
+  ALTER TABLE public.services DROP COLUMN IF EXISTS price;
+  ALTER TABLE public.services DROP COLUMN IF EXISTS duration_minutes;
+  ```
+</Accordion>
+
+---
+
+## SQL Definition (Current State)
+
+```sql
+CREATE TABLE public.services (
+  id                   UUID    NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  name                 TEXT    NOT NULL,
+  description          TEXT,
+  price_min            NUMERIC NOT NULL DEFAULT 0,
+  price_max            NUMERIC NOT NULL DEFAULT 0,
+  duration_min         INTEGER NOT NULL DEFAULT 30,
+  duration_max         INTEGER NOT NULL DEFAULT 30,
+  buffer_time          INTEGER NOT NULL DEFAULT 0,
+  category_id          UUID    REFERENCES public.staff_categories(id) ON DELETE SET NULL,
+  gender               TEXT    NOT NULL DEFAULT 'all',
+  is_active            BOOLEAN NOT NULL DEFAULT true,
+  requires_consultation BOOLEAN NOT NULL DEFAULT false,
+  created_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_services_updated_at
+  BEFORE UPDATE ON public.services
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```

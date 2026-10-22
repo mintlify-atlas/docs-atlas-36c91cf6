@@ -1,0 +1,282 @@
+---
+title: "Appointment Management: Booking, Status, and Workflow"
+sidebarTitle: "Appointments"
+description: "Manage beauty salon appointments end to end — create bookings with client auto-lookup, track status from pending to completed, and update in real time."
+---
+
+The Appointments module is the operational heart of BeautySalon. Every booking created here is persisted to the `appointments` table in Supabase and linked to both a `services` row and a `staff` row via foreign keys. The page offers a filterable list view of all appointments, a slide-in creation form with smart client lookup, and inline status-transition buttons so staff can progress a booking from its initial scheduled state all the way through to completion.
+
+---
+
+## Appointment Status Lifecycle
+
+Every appointment row carries a `status` string column. The valid values and their UI representations are defined in the `statusLabels` map inside `AdminAppointments.tsx`:
+
+<Tabs>
+  <Tab title="Status Flow">
+    <Steps>
+      <Step title="pending — Programada">
+        The default status assigned automatically when a new appointment is created. Rendered with an **orange** badge. Two action buttons appear: **Confirm** (blue) and **Cancel** (red).
+      </Step>
+      <Step title="confirmed — En Proceso">
+        The appointment is actively in progress. Rendered with a **blue** badge. One action button appears: **Complete** (emerald).
+      </Step>
+      <Step title="completed — Completada">
+        The service has been delivered. Rendered with an **emerald** badge. No further transitions are available. This status also contributes to the revenue KPI on the dashboard.
+      </Step>
+      <Step title="cancelled — Cancelada">
+        The booking was cancelled at any point before completion. Rendered with a **red** badge. No further transitions are available.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Color Reference">
+    | Status | Display Label | Badge Color |
+    |--------|--------------|-------------|
+    | `pending` | Programada | Orange |
+    | `confirmed` | En Proceso | Blue |
+    | `completed` | Completada | Emerald |
+    | `cancelled` | Cancelada | Red |
+  </Tab>
+</Tabs>
+
+<Warning>
+  All status update operations — as well as appointment creation — are **disabled in demo mode**. Calling `updateStatus()` or `handleCreate()` while `isDemo === true` triggers a toast notification (`"No disponible en modo demo"`) and returns immediately without touching Supabase. Explore the [live demo](https://beautysalonsaas.netlify.app) to see the read-only view.
+</Warning>
+
+---
+
+## Filtering the List
+
+Five filter chips sit above the appointment list. Selecting one re-runs the React Query fetch with the chosen status value (or no filter for "Todas"):
+
+<CardGroup cols={3}>
+  <Card title="Todas" icon="list">
+    Shows all appointments regardless of status. This is the default view on page load.
+  </Card>
+  <Card title="Programados" icon="clock">
+    Filters to `status = 'pending'` — bookings awaiting confirmation.
+  </Card>
+  <Card title="En Proceso" icon="play">
+    Filters to `status = 'confirmed'` — appointments currently being served.
+  </Card>
+  <Card title="Completadas" icon="circle-check">
+    Filters to `status = 'completed'` — finished and billable appointments.
+  </Card>
+  <Card title="Canceladas" icon="circle-x">
+    Filters to `status = 'cancelled'` — no-shows or client cancellations.
+  </Card>
+</CardGroup>
+
+The Supabase query that drives the list:
+
+```typescript
+let query = supabase
+  .from("appointments")
+  .select("*, services(name, price_min, price_max), staff(name)")
+  .order("appointment_date", { ascending: false })
+  .order("appointment_time", { ascending: false });
+
+if (filter !== "all") query = query.eq("status", filter);
+
+const { data } = await query.limit(100);
+```
+
+---
+
+## Status Transition Buttons
+
+Each appointment card renders action buttons conditionally based on its current `status`. All transitions call the same `updateStatus` function:
+
+```typescript
+const updateStatus = async (id: string, status: string) => {
+  if (isDemo) { toast.info("No disponible en modo demo"); return; }
+
+  const { error } = await supabase
+    .from("appointments")
+    .update({ status })
+    .eq("id", id);
+
+  if (error) { toast.error("Error al actualizar"); return; }
+
+  toast.success(`Cita ${statusLabels[status]?.label.toLowerCase()}`);
+  queryClient.invalidateQueries({ queryKey: ["admin-appointments"] });
+  queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
+};
+```
+
+After a successful update, both the `admin-appointments` and `admin-stats` React Query caches are invalidated so the list and the dashboard KPIs both reflect the change immediately.
+
+---
+
+## Creating a New Appointment
+
+Clicking the **Nueva Cita** button in the header opens a modal form. All form fields map directly to columns on the `appointments` and `clients` tables.
+
+### Form Fields
+
+<AccordionGroup>
+  <Accordion title="NIT o Cédula (required)" icon="hash">
+    The client's tax ID or national ID number. As you type, a **600 ms debounced lookup** fires against the `clients` table. If a matching record is found, the name, email, phone, and address fields are auto-populated and a green `CheckCircle` icon confirms the match. The input border turns emerald and a helper text reads _"Cliente existente — datos cargados"_.
+
+    The lookup is skipped entirely in demo mode.
+  </Accordion>
+  <Accordion title="Razón social / Nombre (required)" icon="user">
+    Full name or business name of the client. Auto-filled from the `clients.name` column if the NIT lookup succeeds.
+  </Accordion>
+  <Accordion title="Dirección (optional)" icon="map-pin">
+    Client's address. Auto-filled from `clients.direccion` if the NIT lookup succeeds. Stored in both the `clients` record and the `appointments.direccion` column.
+  </Accordion>
+  <Accordion title="Correo electrónico (required)" icon="mail">
+    Client's email. Auto-filled from `clients.email` on a successful NIT lookup.
+  </Accordion>
+  <Accordion title="Teléfono (optional)" icon="phone">
+    Client's phone number. Auto-filled from `clients.phone` on a successful NIT lookup.
+  </Accordion>
+  <Accordion title="Categoría (optional)" icon="tag">
+    A dropdown populated from the `staff_categories` table. Selecting a category narrows the **Servicio** dropdown to only services belonging to that category (`services.category_id === selectedCategory`). Resetting to _"Todas las categorías"_ shows all active services and clears the current `service_id` selection.
+  </Accordion>
+  <Accordion title="Servicio (optional)" icon="scissors">
+    A dropdown of active services filtered by the selected category. Populated from `services` where `is_active = true`.
+  </Accordion>
+  <Accordion title="Profesional (optional)" icon="user-check">
+    A dropdown of active staff members. Each option is annotated with the staff member's **availability for the selected date**, derived from a live query against the `appointments` table that refreshes every 15 seconds:
+
+    - **Disponible** — no pending or confirmed appointments on that date.
+    - **N citas programadas** — the count of `pending` or `confirmed` appointments.
+    - **Ocupado (N cita/s)** — at least one appointment has `status = 'confirmed'` on that date (actively serving a client).
+  </Accordion>
+  <Accordion title="Fecha (required)" icon="calendar">
+    Date of the appointment. Defaults to today's date (`new Date().toISOString().split("T")[0]`). Changing this field triggers a re-fetch of staff day appointments for the new date.
+  </Accordion>
+  <Accordion title="Hora (required)" icon="clock">
+    Start time of the appointment. Defaults to `09:00`.
+  </Accordion>
+  <Accordion title="Notas (optional)" icon="file-text">
+    Free-text observations or special instructions. Stored in `appointments.notes`.
+  </Accordion>
+</AccordionGroup>
+
+### NIT/Cédula Debounced Lookup
+
+The lookup fires after the user has typed at least four characters and pauses for 600 ms:
+
+```typescript
+const handleNitChange = (value: string) => {
+  setFormData(prev => ({ ...prev, nit_cedula: value }));
+  setClientFound(false);
+  if (debounceRef.current) clearTimeout(debounceRef.current);
+
+  if (value.trim().length >= 4) {
+    debounceRef.current = setTimeout(() => lookupClient(value), 600);
+  }
+};
+
+const lookupClient = useCallback(async (nit: string) => {
+  if (!nit.trim() || isDemo) { setClientFound(false); return; }
+  setLookingUp(true);
+  try {
+    const { data } = await supabase
+      .from("clients")
+      .select("*")
+      .eq("nit_cedula", nit.trim())
+      .maybeSingle();
+
+    if (data) {
+      setFormData(prev => ({
+        ...prev,
+        client_name: data.name || "",
+        client_email: data.email || "",
+        client_phone: data.phone || "",
+        direccion: data.direccion || "",
+      }));
+      setClientFound(true);
+      toast.success("Cliente encontrado");
+    } else {
+      setClientFound(false);
+    }
+  } catch {
+    setClientFound(false);
+  } finally {
+    setLookingUp(false);
+  }
+}, [isDemo]);
+```
+
+A spinning `Loader2` icon appears inside the NIT input while the request is in flight.
+
+---
+
+## Client Upsert on Save
+
+When `handleCreate` runs, it first **upserts** the client record into the `clients` table using `nit_cedula` as the conflict key. This means the client database is automatically kept up to date every time you create an appointment — no separate client management step required:
+
+```typescript
+// Upsert client before inserting the appointment
+if (formData.nit_cedula.trim()) {
+  await supabase.from("clients").upsert(
+    {
+      nit_cedula: formData.nit_cedula.trim(),
+      name: formData.client_name,
+      email: formData.client_email || null,
+      phone: formData.client_phone || null,
+      direccion: formData.direccion || null,
+    },
+    { onConflict: "nit_cedula" }
+  );
+}
+```
+
+The appointment is then inserted into the `appointments` table:
+
+```typescript
+const { error } = await supabase.from("appointments").insert({
+  nit_cedula: formData.nit_cedula || null,
+  client_name: formData.client_name,
+  direccion: formData.direccion || null,
+  client_email: formData.client_email || null,
+  client_phone: formData.client_phone || null,
+  service_id: formData.service_id || null,
+  staff_id: formData.staff_id || null,
+  appointment_date: formData.appointment_date,
+  appointment_time: formData.appointment_time,
+  notes: formData.notes || null,
+});
+```
+
+On success the form closes, the filter resets, and both the `admin-appointments` and `admin-stats` query caches are invalidated.
+
+<Tip>
+  If `clientFound` is `true` when you open the form for a returning client, an extra **"Actualizar Cliente"** button appears at the bottom of the form. Clicking it performs a standalone upsert against the `clients` table without creating a new appointment, letting you correct a phone number or address on the fly.
+</Tip>
+
+---
+
+## Staff Availability Indicator
+
+The staff dropdown is backed by a separate `staffDayAppointments` query that re-executes whenever the selected `appointment_date` changes and auto-refreshes every 15 seconds:
+
+```typescript
+const { data: staffDayAppointments } = useQuery({
+  queryKey: ["staff-day-appointments", formData.appointment_date],
+  queryFn: async () => {
+    const { data } = await supabase
+      .from("appointments")
+      .select("staff_id, status")
+      .eq("appointment_date", formData.appointment_date)
+      .in("status", ["pending", "confirmed"]);
+
+    const map: Record<string, { total: number; busy: boolean }> = {};
+    (data || []).forEach(a => {
+      if (!a.staff_id) return;
+      if (!map[a.staff_id]) map[a.staff_id] = { total: 0, busy: false };
+      map[a.staff_id].total++;
+      if (a.status === "confirmed") map[a.staff_id].busy = true;
+    });
+    return map;
+  },
+  enabled: !!formData.appointment_date,
+  refetchInterval: 15000,
+});
+```
+
+The resulting map drives the option label for each staff member in the dropdown — giving the receptionist a real-time view of workload before assigning a booking.

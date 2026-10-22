@@ -1,0 +1,136 @@
+---
+title: "Service Categories: Organizing Your Salon's Menu"
+sidebarTitle: "Categories"
+description: "Categories group both services and staff under a shared taxonomy — Hair, Nails, Facial, and more. Use them to filter your service catalog and appointment forms."
+---
+
+Categories are the connective tissue of BeautySalon's service model. A single `staff_categories` table powers three different features simultaneously: it labels each **service** in your catalog, classifies each **staff member** by their specialty, and provides the **filter chips** that narrow down both the service list and the appointment booking form. This shared taxonomy means you only maintain one set of category names across the entire application.
+
+## How Categories Are Used
+
+Every record in the `staff_categories` table can be referenced by two other tables via foreign keys:
+
+<CardGroup cols={2}>
+  <Card title="Services" icon="scissors">
+    Each service row has a `category_id` column (`services.category_id → staff_categories.id`). The Services screen groups and filters its list by these categories, and the Appointments form uses them to narrow the service dropdown before staff selection.
+  </Card>
+  <Card title="Staff" icon="users">
+    Each staff member has a `category_id` column (`staff.category_id → staff_categories.id`). This determines the specialty label shown on the staff card (e.g. *Cabello*, *Uñas*) and is used to help staff selection logic.
+  </Card>
+</CardGroup>
+
+<Note>
+  The category **name** is used verbatim as the filter chip label in both the Services screen and the Appointments booking form. Renaming a category in this module is reflected everywhere immediately — no other records need to be updated.
+</Note>
+
+## Default Demo Categories
+
+The demo mode ships with eight pre-loaded categories drawn directly from the `AdminCategories` component. These represent a full unisex salon menu:
+
+| Category | Description |
+|----------|-------------|
+| **Cabello** | Cortes, coloración, tratamientos capilares |
+| **Uñas** | Manicure, pedicure, uñas acrílicas |
+| **Estética facial** | Limpiezas, hidratación, tratamientos faciales |
+| **Otros Servicios** | Barba, afeitado, perfilado |
+| **Depilación** | Cera, hilo, diferentes zonas |
+| **Masajes y Corporales** | Masajes relajantes, descontracturantes, exfoliación |
+| **Maquillaje** | Social, novias, artístico |
+| **Combos / Paquetes** | Paquetes especiales con múltiples servicios |
+
+These eight categories cover the full range of specialties you would find in a modern unisex salon. You can rename, delete, or extend them freely once you have connected your own Supabase project.
+
+## Categories Table Schema
+
+The `staff_categories` table is intentionally lightweight — its job is to supply a name and optional metadata:
+
+<ResponseField name="id" type="string (uuid)">
+  Auto-generated primary key referenced by `services.category_id` and `staff.category_id`.
+</ResponseField>
+<ResponseField name="name" type="string" required>
+  The display label used throughout the UI as filter chips and dropdown options. Must be unique in practice to avoid ambiguity.
+</ResponseField>
+<ResponseField name="description" type="string | null">
+  An optional free-text note — useful for describing the range of treatments covered by the category.
+</ResponseField>
+<ResponseField name="icon" type="string | null">
+  A Lucide icon name (e.g. `Scissors`, `Sparkles`, `Heart`) stored as a string. Reserved for future icon rendering on category chips.
+</ResponseField>
+<ResponseField name="created_at" type="string (timestamptz)">
+  Auto-set on insert.
+</ResponseField>
+<ResponseField name="updated_at" type="string (timestamptz)">
+  Auto-updated on every row change.
+</ResponseField>
+
+## Creating a Category
+
+The Categories screen keeps the creation form always visible at the top of the page — there is no separate modal to open.
+
+<Steps>
+  <Step title="Enter the category name">
+    Type a name in the **Descripción** field (the primary identifier). This is the only required field. The **Crear** button stays disabled until the field contains at least one non-whitespace character.
+  </Step>
+  <Step title="Add optional notes">
+    Fill in the **Notas** field with a brief description of what services fall under this category. This text is stored in the `description` column and shown in the category list below.
+  </Step>
+  <Step title="Save">
+    Click **Crear**. The new category is inserted into `staff_categories` and the query cache is invalidated, so it immediately appears in the list, in the Services category selector, and in the Appointments form's category filter.
+  </Step>
+</Steps>
+
+## Editing a Category
+
+Click the **pencil** icon on any category row. The form at the top of the page switches to edit mode — the heading changes to *Editar Categoría*, the fields populate with the existing values, and a **Cancelar** button appears.
+
+```typescript
+// Supabase update call — AdminCategories.tsx
+const { error } = await supabase
+  .from("staff_categories")
+  .update({
+    name: name.trim(),
+    description: description.trim() || null,
+    icon,
+  })
+  .eq("id", editing.id);
+```
+
+After saving, the `admin-categories` query key is invalidated. Because the Appointments and Services screens share the same `queryKey: ["admin-categories"]`, their category dropdowns and filter chips refresh automatically.
+
+## Deleting a Category
+
+Click the **trash** icon on a category row. A confirmation dialog appears before any data is removed. The delete operation targets only the `staff_categories` row itself:
+
+```typescript
+const { error } = await supabase
+  .from("staff_categories")
+  .delete()
+  .eq("id", id);
+```
+
+<Warning>
+  Deleting a category does **not** cascade-delete the services or staff members linked to it. Instead, the foreign key constraint is set up to `SET NULL` — meaning `services.category_id` and `staff.category_id` on affected rows become `null`. Those services and staff members remain in the database; they simply lose their category label and will no longer appear under any category filter chip.
+</Warning>
+
+## Available Icon Tokens
+
+The `icon` field accepts the following Lucide icon name strings, which are the options offered in the UI:
+
+<Accordion title="Supported icon names">
+
+| Token | Lucide Icon |
+|-------|-------------|
+| `Scissors` | ✂ Scissors |
+| `Sparkles` | ✨ Sparkles |
+| `Heart` | ♥ Heart |
+| `Star` | ★ Star |
+| `Zap` | ⚡ Zap |
+| `Flower` | 🌸 Flower |
+
+These are stored as plain strings in the database. Rendering the icon from the token string is handled in the component layer.
+
+</Accordion>
+
+<Tip>
+  Keep category names short and consistent with how you want them to appear as filter chip labels throughout the app. Names like *Cabello* and *Uñas* work better than *Servicios de Peluquería* because they fit cleanly inside the chip pill without truncation.
+</Tip>

@@ -1,0 +1,325 @@
+---
+title: "staff and staff_categories Tables: Schema Reference"
+sidebarTitle: "staff"
+description: "The staff table stores beauty salon team members with contact details, specialty category, and active status. staff_categories groups staff and services by specialty."
+---
+
+BeautySalon uses two closely related tables to model the team structure. `staff_categories` acts as the taxonomy layer — it defines specialties like *Cabello*, *Uñas*, or *Masajes y Corporales* — while `staff` holds the actual team members, each optionally assigned to a category. The `services` table uses the same `staff_categories` FK, meaning both staff members and the services they perform share the same specialty classification system. Both tables are created in migration `20260411210137` and carry full RLS policies restricting writes to authenticated admin users.
+
+---
+
+## staff_categories Table
+
+### TypeScript Row Type
+
+```typescript
+type StaffCategoryRow = {
+  id: string              // uuid
+  name: string
+  description: string | null
+  icon: string | null     // defaults to 'Scissors'
+  created_at: string      // timestamptz
+  updated_at: string      // timestamptz
+}
+```
+
+### Column Reference
+
+<ResponseField name="id" type="uuid" required>
+  Primary key. Generated server-side with `gen_random_uuid()`. Referenced as a foreign key by both `staff.category_id` and `services.category_id`.
+</ResponseField>
+
+<ResponseField name="name" type="text" required>
+  Display name of the specialty (e.g., `"Cabello"`, `"Uñas"`, `"Maquillaje"`). Shown in the category filter dropdown in the booking form and in the admin service/staff management panels.
+</ResponseField>
+
+<ResponseField name="description" type="text">
+  Optional longer description of the specialty. Nullable. Not currently rendered in the admin UI but available for public-facing pages.
+</ResponseField>
+
+<ResponseField name="icon" type="text">
+  Icon identifier string. Defaults to `'Scissors'`. Intended for use with an icon library (e.g., Lucide) to visually represent the category in the UI.
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamptz" required>
+  Row creation timestamp. Set automatically to `now()` on insert.
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamptz" required>
+  Updated automatically by the `update_staff_categories_updated_at` trigger on every `UPDATE`.
+</ResponseField>
+
+### RLS Policies
+
+```sql
+-- Public read — anyone (including anon) can view categories
+CREATE POLICY "Anyone can view staff categories"
+  ON public.staff_categories
+  FOR SELECT USING (true);
+
+-- Writes require authentication
+CREATE POLICY "Authenticated users can insert staff categories"
+  ON public.staff_categories FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update staff categories"
+  ON public.staff_categories FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Authenticated users can delete staff categories"
+  ON public.staff_categories FOR DELETE TO authenticated USING (true);
+```
+
+<Warning>
+  Deleting a `staff_categories` row sets `category_id` to `NULL` on all related `staff` and `services` rows (`ON DELETE SET NULL`). It does not cascade-delete those rows. Verify orphaned records after removing a category.
+</Warning>
+
+### SQL Definition
+
+```sql
+CREATE TABLE public.staff_categories (
+  id          UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT,
+  icon        TEXT DEFAULT 'Scissors',
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.staff_categories ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_staff_categories_updated_at
+  BEFORE UPDATE ON public.staff_categories
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```
+
+---
+
+## staff Table
+
+### TypeScript Row Type
+
+```typescript
+type StaffRow = {
+  id: string              // uuid
+  name: string
+  phone: string | null
+  email: string | null
+  photo_url: string | null
+  category_id: string | null  // uuid → staff_categories.id
+  is_active: boolean          // default true
+  created_at: string          // timestamptz
+  updated_at: string          // timestamptz
+}
+```
+
+### Column Reference
+
+<ResponseField name="id" type="uuid" required>
+  Primary key. Generated server-side with `gen_random_uuid()`. Referenced by `appointments.staff_id`.
+</ResponseField>
+
+<ResponseField name="name" type="text" required>
+  Full name of the team member (e.g., `"María García"`). Displayed in the staff selector on the booking form, and shown alongside appointment cards in the admin panel.
+</ResponseField>
+
+<ResponseField name="phone" type="text">
+  Staff member's contact phone number. Nullable. Not displayed in the public booking UI but visible in admin staff management.
+</ResponseField>
+
+<ResponseField name="email" type="text">
+  Staff member's contact email. Nullable. No uniqueness constraint at the database level.
+</ResponseField>
+
+<ResponseField name="photo_url" type="text">
+  Full URL to a profile photo (e.g., a Supabase Storage URL or external CDN link). Nullable. Intended for use in public-facing staff profile cards.
+</ResponseField>
+
+<ResponseField name="category_id" type="uuid">
+  Foreign key → `staff_categories.id`. Nullable. Identifies the staff member's specialty. Set to `NULL` via `ON DELETE SET NULL` if the category is deleted. The booking form currently does not filter the staff selector by category — all active staff are shown.
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean" required>
+  Controls visibility in the booking form's staff selector. Defaults to `true`. Set to `false` to remove a staff member from new bookings without deleting their historical appointment records.
+</ResponseField>
+
+<ResponseField name="created_at" type="timestamptz" required>
+  Row creation timestamp. Set automatically on insert.
+</ResponseField>
+
+<ResponseField name="updated_at" type="timestamptz" required>
+  Updated automatically by the `update_staff_updated_at` trigger on every `UPDATE`.
+</ResponseField>
+
+### Foreign Key Relationships
+
+```sql
+-- staff → staff_categories
+CONSTRAINT staff_category_id_fkey
+  FOREIGN KEY (category_id) REFERENCES public.staff_categories(id)
+  ON DELETE SET NULL
+
+-- appointments → staff (defined on the appointments table)
+CONSTRAINT appointments_staff_id_fkey
+  FOREIGN KEY (staff_id) REFERENCES public.staff(id)
+  ON DELETE SET NULL
+```
+
+### RLS Policies
+
+```sql
+-- Public read — anyone can see staff members
+CREATE POLICY "Anyone can view active staff"
+  ON public.staff
+  FOR SELECT USING (true);
+
+-- Writes require authentication
+CREATE POLICY "Authenticated users can insert staff"
+  ON public.staff FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can update staff"
+  ON public.staff FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Authenticated users can delete staff"
+  ON public.staff FOR DELETE TO authenticated USING (true);
+```
+
+<Note>
+  Like the services SELECT policy, "Anyone can view active staff" uses `USING (true)` and does not filter by `is_active`. The booking form applies `.eq("is_active", true)` in the query itself to exclude inactive staff. If you want the database to enforce the filter, update the policy to `USING (is_active = true)`.
+</Note>
+
+### SQL Definition
+
+```sql
+CREATE TABLE public.staff (
+  id          UUID    NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  name        TEXT    NOT NULL,
+  phone       TEXT,
+  email       TEXT,
+  photo_url   TEXT,
+  category_id UUID    REFERENCES public.staff_categories(id) ON DELETE SET NULL,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.staff ENABLE ROW LEVEL SECURITY;
+
+CREATE TRIGGER update_staff_updated_at
+  BEFORE UPDATE ON public.staff
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+```
+
+---
+
+## Relationship Diagram
+
+```
+staff_categories
+  id (PK)
+  name
+  description
+  icon
+     │
+     ├─────────────────────────────┐
+     │ staff.category_id (FK)      │ services.category_id (FK)
+     ▼                             ▼
+  staff                         services
+  id (PK)                       id (PK)
+  name                          name
+  is_active                     is_active
+     │
+     │ appointments.staff_id (FK)
+     ▼
+  appointments
+  id (PK)
+  client_name
+  status
+```
+
+---
+
+## Example Queries
+
+<Tabs>
+  <Tab title="Load Active Staff">
+    Used by the booking form to populate the staff selector:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data: staff, error } = await supabase
+      .from("staff")
+      .select("id, name")
+      .eq("is_active", true)
+      .order("name");
+    ```
+  </Tab>
+  <Tab title="Load Staff with Category">
+    Admin staff list with joined category name:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase
+      .from("staff")
+      .select(`
+        id,
+        name,
+        phone,
+        email,
+        photo_url,
+        is_active,
+        staff_categories(id, name, icon)
+      `)
+      .order("name");
+    ```
+
+    Each row in `data` includes a nested `staff_categories` object (or `null` if no category is assigned).
+  </Tab>
+  <Tab title="Create a Staff Member">
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data, error } = await supabase.from("staff").insert({
+      name: "Ana Martínez",
+      phone: "+573101234567",
+      email: "ana@salon.app",
+      photo_url: null,
+      category_id: "uuid-of-cabello-category",
+      is_active: true,
+    });
+
+    if (error) console.error(error.message);
+    ```
+  </Tab>
+  <Tab title="Manage Categories">
+    Load all categories for filter dropdowns:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { data: categories } = await supabase
+      .from("staff_categories")
+      .select("id, name, icon")
+      .order("name");
+
+    // Create a new category
+    const { error } = await supabase.from("staff_categories").insert({
+      name: "Depilación",
+      description: "Servicios de depilación con cera y láser",
+      icon: "Zap",
+    });
+    ```
+  </Tab>
+  <Tab title="Soft-Delete Staff">
+    Deactivate a team member without removing their appointment history:
+
+    ```typescript
+    import { supabase } from "@/integrations/supabase/client";
+
+    const { error } = await supabase
+      .from("staff")
+      .update({ is_active: false })
+      .eq("id", staffMemberId);
+    ```
+  </Tab>
+</Tabs>
