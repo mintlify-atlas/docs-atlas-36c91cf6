@@ -1,10 +1,10 @@
 ---
 title: "Database Schema Overview: Tables, Relationships, and Enums"
 sidebarTitle: "Schema Overview"
-description: "BeautySalon's PostgreSQL schema has 7 tables managed by Supabase. This page maps the entity relationships between appointments, services, staff, and clients."
+description: "BeautySalon's PostgreSQL schema has 8 tables managed by Supabase, covering appointments, staff, services, clients, categories, transactions, and profiles."
 ---
 
-BeautySalon's database runs on PostgreSQL via Supabase and is organized into seven tables. Five of these tables form the core salon management domain — `staff_categories`, `staff`, `services`, `appointments`, and `clients` — while two tables (`categories` and `transactions`) belong to a legacy financial module that is present in the schema but not surfaced in the current salon management UI. Every table has Row Level Security (RLS) enabled, and all mutable tables carry an `updated_at` timestamp maintained automatically by a shared trigger function.
+BeautySalon's database runs on PostgreSQL via Supabase and is organized into eight tables. Five of these tables form the core salon management domain — `staff_categories`, `staff`, `services`, `appointments`, and `clients` — while two tables (`categories` and `transactions`) belong to a legacy financial module that is present in the schema but not surfaced in the current salon management UI. The eighth table, `profiles`, stores per-user display names and is auto-created on signup. Every table has Row Level Security (RLS) enabled, and all mutable tables carry an `updated_at` timestamp maintained automatically by a shared trigger function.
 
 ## Tables at a Glance
 
@@ -203,7 +203,7 @@ The `display_name` defaults to the portion of the email address before the `@` s
 
 ## RLS Policy Summary
 
-All seven tables have Row Level Security enabled. The table below summarises which operations are open to anonymous visitors versus authenticated users:
+All eight tables have Row Level Security enabled. The table below summarises which operations are open to anonymous visitors versus authenticated users:
 
 | Table | Anon SELECT | Anon INSERT | Auth SELECT | Auth INSERT | Auth UPDATE | Auth DELETE |
 |-------|:-----------:|:-----------:|:-----------:|:-----------:|:-----------:|:-----------:|
@@ -224,7 +224,7 @@ All seven tables have Row Level Security enabled. The table below summarises whi
 
 ## Migration File Index
 
-The schema was built across four migration files applied in order:
+The schema was built across five migration files applied in order:
 
 | File | Description |
 |------|-------------|

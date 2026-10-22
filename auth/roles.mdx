@@ -1,7 +1,7 @@
 ---
-title: "User Roles and Access Control in BeautySalon"
+title: "BeautySalon Role Model and Row-Level Security Overview"
 sidebarTitle: "Roles & Access"
-description: "BeautySalon uses a single admin role — any authenticated Supabase user has full access. Profiles are scoped per user; salon data is shared across all admins."
+description: "BeautySalon uses one admin role: all authenticated Supabase users share full salon data access, while profiles and finance records are scoped per user."
 ---
 
 BeautySalon operates with a **single, flat admin role**: every authenticated user has identical read and write access to all salon data — staff, services, appointments, and staff categories. There is no permissions hierarchy, no owner concept on salon records, and no per-user isolation of operational data. This model is intentional for a single-salon deployment where every login belongs to a trusted operator. Row-level security is still enabled on every table, but the policies for salon-data tables check only that the caller is authenticated (`TO authenticated`), not which user they are.

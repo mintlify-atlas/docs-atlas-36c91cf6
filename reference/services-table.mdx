@@ -1,7 +1,7 @@
 ---
 title: "services Table: Catalog Schema and Price/Duration Fields"
 sidebarTitle: "services"
-description: "The services table defines the salon's service catalog with price ranges in COP, duration windows in minutes, buffer times, and category and consultation flags."
+description: "Column reference for the services table: price and duration ranges, buffer time, gender targeting, consultation flag, and category FK with RLS policies."
 ---
 
 The `services` table is the authoritative catalog of every treatment offered by the salon. It was introduced in migration `20260411210137` with a single `price` column and a `duration_minutes` column, then extended in `20260411212420` to support price ranges (`price_min` / `price_max`) and duration windows (`duration_min` / `duration_max`). Those original columns were dropped and existing data was migrated into the new range columns. The table also gained `gender`, `requires_consultation`, and `buffer_time` in the same migration, giving the catalog the flexibility needed for a full unisex salon offering.

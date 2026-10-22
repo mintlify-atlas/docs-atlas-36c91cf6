@@ -1,7 +1,7 @@
 ---
 title: "Explore BeautySalon with Demo Mode — No Setup Required"
 sidebarTitle: "Demo Mode"
-description: "Demo Mode lets you explore every screen of BeautySalon with realistic sample data — no Supabase account or configuration needed. Write operations are disabled."
+description: "Demo Mode lets you explore every BeautySalon screen with realistic sample data — no Supabase account or setup needed. Write operations are disabled."
 ---
 
 Demo Mode is a built-in client-side feature that lets anyone evaluate BeautySalon without creating a Supabase project, copying environment variables, or running migrations. When active, the app bypasses all Supabase API calls and serves hardcoded, realistic sample data directly in the browser. Every screen in the admin panel is fully navigable, so you can get a genuine feel for the workflow before committing to a self-hosted deployment.
@@ -71,7 +71,7 @@ Every screen in the admin panel is accessible and populated with realistic sampl
 
 <CardGroup cols={2}>
   <Card title="Dashboard" icon="chart-bar">
-    Shows 7 KPI cards with sample counts: 5 total appointments, 8 active staff, 12 services, COP $385,000 in revenue, and status breakdowns for pending, confirmed, and cancelled.
+    Shows 6 KPI cards with sample counts: 5 total appointments, 8 active staff, 12 services, COP $385,000 in revenue, and status breakdowns for pending and cancelled.
   </Card>
   <Card title="Appointments" icon="calendar">
     Two sample appointments are shown — one for "Juan Pérez" (Corte de Cabello, pending) and one for "Laura Silva" (Manicura, confirmed) — with all filter tabs functional.
@@ -164,7 +164,8 @@ const { data: appointments } = useQuery({
     let query = supabase
       .from("appointments")
       .select("*, services(name, price_min, price_max), staff(name)")
-      .order("appointment_date", { ascending: false });
+      .order("appointment_date", { ascending: false })
+      .order("appointment_time", { ascending: false });
     if (filter !== "all") query = query.eq("status", filter);
     const { data } = await query.limit(100);
     return data || [];

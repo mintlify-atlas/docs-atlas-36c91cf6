@@ -1,7 +1,7 @@
 ---
 title: "appointments Table: Schema, Columns, and RLS Policies"
 sidebarTitle: "appointments"
-description: "The appointments table stores all salon bookings. Columns cover client identity, NIT/cédula, service and staff FK references, date/time, and a four-state status field."
+description: "Column reference for the appointments table: client identity, NIT/cédula, service and staff FKs, date/time slot, and four-state status with RLS policies."
 ---
 
 The `appointments` table is the operational heart of BeautySalon. Every booking — whether created by a staff member through the admin dashboard or submitted through a public-facing form — lands in this table. Client identity is stored inline (name, phone, email, address, NIT/cédula) so that appointments remain readable even if the corresponding `clients` record is later modified. The `service_id` and `staff_id` columns are nullable foreign keys that reference the `services` and `staff` tables respectively; setting them to `NULL` via `ON DELETE SET NULL` ensures appointments survive catalog changes.

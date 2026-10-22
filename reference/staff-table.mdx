@@ -1,7 +1,7 @@
 ---
 title: "staff and staff_categories Tables: Schema Reference"
 sidebarTitle: "staff"
-description: "The staff table stores beauty salon team members with contact details, specialty category, and active status. staff_categories groups staff and services by specialty."
+description: "Schema reference for staff and staff_categories. Covers team member columns, specialty categories, FK relationships, and RLS policies for both tables."
 ---
 
 BeautySalon uses two closely related tables to model the team structure. `staff_categories` acts as the taxonomy layer — it defines specialties like *Cabello*, *Uñas*, or *Masajes y Corporales* — while `staff` holds the actual team members, each optionally assigned to a category. The `services` table uses the same `staff_categories` FK, meaning both staff members and the services they perform share the same specialty classification system. Both tables are created in migration `20260411210137` and carry full RLS policies restricting writes to authenticated admin users.

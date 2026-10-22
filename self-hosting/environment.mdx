@@ -1,7 +1,7 @@
 ---
-title: "Environment Variables and Supabase Configuration"
+title: "BeautySalon Environment Variables and Supabase Setup"
 sidebarTitle: "Environment"
-description: "BeautySalon requires two environment variables: your Supabase project URL and anon key. Both are exposed to the browser via Vite's VITE_ prefix convention."
+description: "Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to connect BeautySalon to Supabase. Both values are exposed to the browser via Vite's VITE_ prefix."
 ---
 
 BeautySalon connects to Supabase entirely from the browser — there is no backend server proxying requests. The Supabase client is initialised once at startup using two values read directly from Vite's environment variable system. Getting these values right is the single most common source of connection issues when self-hosting, so this page explains exactly where to find them, how Vite exposes them, and how to keep them secure.

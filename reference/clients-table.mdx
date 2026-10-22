@@ -1,7 +1,7 @@
 ---
 title: "clients Table: Schema, Upsert Pattern, and History Queries"
 sidebarTitle: "clients"
-description: "The clients table stores returning customer records indexed by NIT or cédula. Records are created or updated automatically when appointments are booked via the upsert pattern."
+description: "Schema and upsert reference for the clients table. Records are keyed by NIT or cédula and created automatically via an upsert on appointment booking."
 ---
 
 The `clients` table was introduced in migration `20260411221558` as a persistent directory of returning salon customers. Unlike `appointments`, which stores client information inline for each booking, `clients` maintains a single canonical record per person identified by their Colombian tax or national identity number (`nit_cedula`). This design supports a lookup-as-you-type UX in the booking form: when a receptionist types a client's ID, the form auto-fills the name, email, phone, and address from the existing record. If the client is new, their record is created the moment the appointment is saved. Every `clients` write operation requires authentication, making this a staff-only table.

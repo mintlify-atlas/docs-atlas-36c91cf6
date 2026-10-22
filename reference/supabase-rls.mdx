@@ -1,7 +1,7 @@
 ---
 title: "Row-Level Security Policies for Every BeautySalon Table"
 sidebarTitle: "Supabase RLS"
-description: "BeautySalon enables RLS on all tables. Salon data (staff, services, appointments) is accessible by any authenticated user. Profile and financial data is owner-scoped."
+description: "Complete RLS policy reference for all BeautySalon tables. Salon data is publicly readable; client PII and admin mutations require authentication."
 ---
 
 Row-Level Security (RLS) is a PostgreSQL feature that Supabase exposes natively. When RLS is enabled on a table, every query — whether it originates from the client SDK, a serverless function, or the Supabase dashboard's SQL editor — is filtered through a set of policies before any rows are read or written. BeautySalon activates RLS on **every** table it creates, which means the Supabase `anon` key can be safely shipped in client-side JavaScript without exposing data that doesn't belong to the requesting user.

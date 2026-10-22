@@ -12,7 +12,7 @@ Each staff member is represented by a compact card in a responsive grid. The car
 
 <CardGroup cols={2}>
   <Card title="Availability Badge" icon="circle-dot">
-    A coloured pill in the top-left corner of the photo area shows one of three states: **Available** (green), **Busy** (red), or **Inactive** (grey). The badge updates in real time via the polling query.
+    A coloured pill in the top-left corner of the photo area shows one of three states: **Disponible** (green), **Ocupado** (red), or **Inactivo** (grey). The badge updates in real time via the polling query.
   </Card>
   <Card title="Appointment Count" icon="calendar">
     Below the staff member's name and category, the card shows the number of appointments scheduled for today — e.g. *3 citas hoy*. This counts both `pending` and `confirmed` appointments.
@@ -100,7 +100,7 @@ Click **Agregar** in the top-right header to expand the inline form. Editing a c
     Optionally provide a **Teléfono** and **Email**. Both are stored as nullable columns (`phone`, `email`) in the `staff` table and are not displayed on the card itself, but are available for future notifications or reporting.
   </Step>
   <Step title="Set active status">
-    The **Activo** checkbox maps to the `is_active` boolean. Unchecking it marks the staff member as inactive — they will no longer appear in the Appointments form's staff selector and will be excluded from the Available filter.
+    The **Activo** checkbox maps to the `is_active` boolean. Unchecking it marks the staff member as inactive — they will no longer appear in the Appointments form's staff selector and will be excluded from the **Disponible** filter.
   </Step>
   <Step title="Save">
     Click **Crear** (or **Actualizar** when editing). On success the staff query and the admin stats query are both invalidated so counts on the Dashboard refresh immediately.

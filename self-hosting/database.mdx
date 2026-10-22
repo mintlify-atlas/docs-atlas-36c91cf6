@@ -1,7 +1,7 @@
 ---
-title: "Database Migrations and Supabase Schema Setup"
+title: "BeautySalon Database Migrations and Schema Reference"
 sidebarTitle: "Database"
-description: "BeautySalon's schema is defined in 5 SQL migration files. Apply them in order via the Supabase dashboard SQL editor or the Supabase CLI to set up all tables and RLS policies."
+description: "Apply BeautySalon's 5 SQL migrations in order to create all tables, RLS policies, triggers, and enums via the Supabase dashboard or CLI."
 ---
 
 BeautySalon uses Supabase's migration system to version-control every change to the Postgres database schema. All five migration files live in the `supabase/migrations/` directory and must be applied in chronological order — each file builds on the tables, types, and functions defined by the ones before it. After running all five migrations your database will have every table, index, trigger, RLS policy, and enum type the application needs.
